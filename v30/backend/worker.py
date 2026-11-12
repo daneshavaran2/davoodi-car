@@ -147,7 +147,9 @@ def _recompute(cur,run_started):
 
 def run_once(scheduled_for=None):
     """A single scheduler tick. Advisory lock and hour key prevent overlap."""
-    scheduled_for=scheduled_for or _now().replace(minute=0,second=0,microsecond=0)
+    if scheduled_for is None:
+        zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
+        scheduled_for=_now().astimezone(zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
     with connection(worker=True) as db:
         with db.cursor() as cur:
             cur.execute('SELECT pg_try_advisory_lock(%s) AS locked',(ADVISORY_LOCK_ID,))
@@ -231,7 +233,8 @@ def main():
         last_tick=None
         while True:
             try:
-                current=_now().replace(minute=0,second=0,microsecond=0)
+                local_zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
+                current=_now().astimezone(local_zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
                 if current!=last_tick:
                     last_tick=current
                     log.info('Scheduled collection: %s',run_once(current))
@@ -246,4 +249,5 @@ def main():
                 log.exception('Scheduled collection failed')
             time.sleep(20)
     else:print(run_once())
+
 if __name__=='__main__':main()

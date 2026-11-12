@@ -3,10 +3,10 @@ import os
 import unittest
 from unittest.mock import patch
 
-from connectors.browser import _valid_public_url, browser_mode
+from connectors.browser import _valid_public_url, browser_mode, AD_LINK_READY_JS
 from connectors.extract import listing_cards_from_html, detail_fields
 from connectors.common import explicit_price, mileage_value, fetch_html
-from connectors import bama, hamrah
+from connectors import bama, hamrah, divar
 
 PAGE = '''<main id="list">
 <article data-testid="car-card"><a href="/car/detail-111"><h3>فیدلیتی پرایم ۱۴۰۳</h3></a>
@@ -164,6 +164,17 @@ class ExtractionTests(unittest.TestCase):
                 rows=listing_cards_from_html(page.content(),'https://bama.ir/car',is_bama_ad)
                 self.assertEqual(len(rows),2)
                 self.assertEqual(rows[0]['price'],2_400_000_000)
+                # Divar links use /v/ and can appear after delayed JS hydration.
+                page.set_content('''<main id="root"></main><script>
+                    setTimeout(() => {
+                      document.getElementById('root').innerHTML =
+                        '<article><a href="/v/fidelity/xyz123">فیدلیتی پرایم ۱۴۰۳</a><span>قیمت خودرو ۲ میلیارد تومان</span></article>';
+                    }, 450);
+                </script>''')
+                page.wait_for_function(AD_LINK_READY_JS,timeout=2000)
+                hydrated=listing_cards_from_html(page.content(),'https://divar.ir/s/tehran/car',divar._is_detail)
+                self.assertEqual(len(hydrated),1)
+                self.assertEqual(hydrated[0]['price'],2_000_000_000)
             finally: browser.close()
 
 

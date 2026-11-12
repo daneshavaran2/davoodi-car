@@ -28,7 +28,7 @@ def search(vehicle,limit=25):
     term=' '.join(str(x) for x in (model,vehicle.get('trim') or '',vehicle.get('year') or '') if x)
     url='https://divar.ir/s/'+city+'/car?q='+quote(term,safe='')
     raw=fetch_html(url,timeout=9)
-    cards=listing_cards_from_html(raw,url,_is_detail,limit=limit)
+    cards=listing_cards_from_html(raw,url,_is_detail,limit=max(100,limit*4))
     result=[];max_detail=min(limit,int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')))
     for card in cards:
         if not matches_model(vehicle.get('brand'),model,card['title']+' '+card['content']):continue
@@ -40,6 +40,8 @@ def search(vehicle,limit=25):
                         card[key]=details[key]
                 if details.get('title') and matches_model(vehicle.get('brand'),model,details['title']):card['title']=details['title']
                 card['content']=(details.get('content') or card['content'])[:2200]
-            except (RuntimeError, ValueError, LookupError):pass
+            except (RuntimeError, ValueError, LookupError):
+                card['detail_error']='دریافت جزئیات این آگهی ممکن نشد'
         result.append(card)
+        if len(result)>=limit:break
     return result

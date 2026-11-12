@@ -1,5 +1,0 @@
-fastapi==0.115.12
-uvicorn==0.34.2
-python-multipart>=0.0.9
-playwright==1.57.0
-beautifulsoup4>=4.12.3,<5

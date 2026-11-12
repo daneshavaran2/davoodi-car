@@ -80,6 +80,30 @@ class ExtractionV27Tests(unittest.TestCase):
         self.assertEqual(res[0]['kind'],'listing')
         _persist.assert_called_once()
 
+    def test_browser_knows_detail_pages_vs_search_pages(self):
+        from connectors.browser import _is_detail_page
+        self.assertTrue(_is_detail_page('https://divar.ir/v/AaXmEgkp'))
+        self.assertTrue(_is_detail_page('https://bama.ir/car/detail-123456'))
+        self.assertTrue(_is_detail_page('https://hamrah-mechanic.com/cars-for-sale/brand/model/1234'))
+        self.assertFalse(_is_detail_page('https://divar.ir/s/tehran/car'))
+
+    def test_mismatched_card_and_detail_price_is_rejected(self):
+        from connectors import bama
+        listing='''<article><a href="/car/detail-111"><h3>فیدلیتی پرایم ۱۴۰۳</h3></a>
+          <span>کارکرد ۵۰ هزار کیلومتر</span><span>قیمت خودرو ۲ میلیارد تومان</span></article>'''
+        detail='''<main><h1>فیدلیتی پرایم ۱۴۰۳</h1>
+           <span>کارکرد ۵۰ هزار کیلومتر</span>
+           <p>قیمت خودرو ۳ میلیارد تومان</p></main>'''
+        with patch.object(bama, 'fetch_html', side_effect=lambda u,**kw:listing if u.endswith('/car') else detail):
+            rows=bama.search({'brand':'بهمن موتور','model':'فیدلیتی'},limit=3)
+        self.assertEqual(len(rows),1)
+        self.assertTrue(rows[0]['price_conflict'])
+        car={'brand':'بهمن موتور','model':'فیدلیتی','trim':'پرایم',
+             'year':1403,'mileage':50000}
+        normalized=main._normalize_result({'name':'باما','domain':'bama.ir'},rows[0],car)
+        self.assertFalse(normalized['accepted'])
+        self.assertIn('ناسازگار',normalized['rejection_reason'])
+
     def test_empty_result_short_cache_ttl(self):
         self.assertLessEqual(main._effective_cache_ttl({'diagnostics':{'accepted':0}}),120)
         self.assertEqual(main._effective_cache_ttl({'diagnostics':{'accepted':1}}),main.CACHE_TTL)

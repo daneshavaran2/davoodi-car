@@ -1382,7 +1382,7 @@ def research_market(vehicle):
 
     # Merge connector + fallback attempts into one readable status row per source.
     merged_status={}
-    rank={'evidence':6,'searched':5,'connector':4,'no_results':3,'not_configured':2,'not_checked':2,'connector_error':1,'rate_limited':1,'error':1}
+    rank={'evidence':7,'searched':6,'connector':5,'no_results':4,'connector_error':3,'rate_limited':3,'error':3,'not_configured':2,'not_checked':2}
     for st in statuses:
         d=merged_status.setdefault(st['domain'],{'name':st['name'],'domain':st['domain'],'status':st['status'],
             'count':0,'raw_count':0,'accepted_count':0,'modes':[]})
@@ -1390,7 +1390,7 @@ def research_market(vehicle):
         d['accepted_count']+=int(st.get('accepted_count') or 0)
         if st.get('mode') and st['mode'] not in d['modes']:d['modes'].append(st['mode'])
         if rank.get(st['status'],0)>rank.get(d['status'],0):d['status']=st['status']
-        if st.get('detail'):d['detail']=st['detail']
+        if st.get('detail') and not (st['status']=='not_configured' and d.get('detail')):d['detail']=st['detail']
     statuses=list(merged_status.values())
     for st in statuses:
         if st.get('accepted_count',0)>0:st['status']='evidence'
@@ -1432,6 +1432,8 @@ def research_market(vehicle):
             if 'تکراری' in x['rejection_reason']:diagnostics['duplicates_removed']+=1
             if 'قدیمی' in x['rejection_reason']:diagnostics['stale_removed']+=1
     warnings=[]
+    inaccessible=[s['name'] for s in statuses if s.get('status') in ('connector_error','rate_limited','error')]
+    if inaccessible:warnings.append('دسترسی یا استخراج در منابع زیر ناموفق بود؛ این موضوع به معنای نبود آگهی نیست: '+ '، '.join(inaccessible[:4]))
     if not AVALAI_KEY:
         warnings.append('کلید جست‌وجوی تکمیلی (AVALAI_API_KEY) تنظیم نشده است؛ برخی سایت‌ها تنها از طریق کانکتور عمومی بررسی شده‌اند.')
     if fallback_errors:warnings.append('برخی جست‌وجوهای منبع کامل نشدند: '+' | '.join(fallback_errors[:3]))

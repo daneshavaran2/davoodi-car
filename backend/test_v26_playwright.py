@@ -132,6 +132,17 @@ class ExtractionTests(unittest.TestCase):
         from connectors.divar import _is_detail
         self.assertFalse(_is_detail('https://divar.ir.attacker.test/v/fidelity/123'))
 
+    def test_blocked_site_not_reported_as_no_listings(self):
+        os.environ.setdefault('ADMIN_PASSWORD','offline-v26-test-password')
+        os.environ.setdefault('SESSION_SECRET','offline-v26-test-secret-longer-than-32-characters')
+        os.environ.setdefault('DB_PATH','/tmp/davoodi-v26-test.sqlite3')
+        import main
+        vehicle={'brand':'بهمن موتور','model':'فیدلیتی','trim':'پرایم','year':1403,'mileage':50000}
+        with patch.object(main,'AVALAI_KEY',''), patch.object(main,'_direct_connector',return_value=None), patch.object(main,'_builtin_connector',side_effect=RuntimeError('HTTP 403')):
+            result=main.research_market(vehicle)
+        self.assertTrue(any(x['status']=='connector_error' for x in result['site_status']))
+        self.assertTrue(any('به معنای نبود آگهی نیست' in x for x in result['warnings']))
+
     def test_actual_chromium_hydration_in_memory(self):
         """Run real Chromium JS with set_content; external navigation is blocked in CI."""
         try:

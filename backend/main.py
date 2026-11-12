@@ -766,7 +766,7 @@ def readiness():
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
             'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'28.0.0-name-only-market'}
+            'version':'29.0.0-source-verified-simple-market'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).

@@ -59,6 +59,11 @@ def _rows(raw,url,brand,model,limit):
         if len(rows)<max_detail:
             try:
                 more=detail_fields(fetch_html(card['url'],timeout=6),card['title'])
+                if more.get('title') and not matches_model(brand,model,more['title']):
+                    card['detail_mismatch']=True
+                    raise ValueError('عنوان صفحه جزئیات با مدل خواسته‌شده تفاوت دارد')
+                if card.get('price') and more.get('price') and abs(card['price']-more['price'])>max(50_000_000,card['price']*.05):
+                    card['price_conflict']=True
                 # A detail page can add missing data, but should not silently
                 # override a known valid card price with contradictory content.
                 for key in ('price','year','mileage','published_at'):

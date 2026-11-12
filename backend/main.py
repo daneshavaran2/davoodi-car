@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from connectors import run as run_builtin_connector
 from market_intelligence import assess_and_dedupe, price_summary
+from model_overview import name_only_search, model_overview
 from vehicle_nlp import identify_vehicle, generation_from_text, variant_from_text
 from safety_v24 import explicit_vehicle_price, mileage_from_description, new_status, body_group, trim_status
 
@@ -725,7 +726,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'27.0.0-market-reliability'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'28.0.0-name-only-market'}
 
 @app.get('/api/browser-check')
 def browser_check(_=Depends(authorized)):
@@ -758,7 +759,7 @@ def readiness():
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
             'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'27.0.0-market-reliability'}
+            'version':'28.0.0-name-only-market'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1482,12 +1483,24 @@ def research_market(vehicle):
         elif st['status'] in ('connector','searched','no_results') and items:
             st['status']='no_valid_evidence'
     accepted=[x for x in normalized if x['accepted']]
+    broad_query=name_only_search(vehicle)
+    # Never pool asking prices from different model years, trims, or zero/used
+    # cars when the user entered only a model name.
+    overview=model_overview(vehicle,accepted) if broad_query else None
     new_items=[x for x in accepted if x['is_new']]
     used_items=[x for x in accepted if not x['is_new']]
     new_stats=_weighted_stats(new_items,0)
     used_stats=_weighted_stats(used_items,vehicle.get('mileage'))
-    # Make cards and source counters consistent with the statistical outlier filter.
-    dropped_outliers=new_stats.get('outliers_removed',0)+used_stats.get('outliers_removed',0)
+    if broad_query:
+        for stats in (new_stats,used_stats):
+            stats.update({field:None for field in (
+                'price_average','price_median','price_min','price_max',
+                'suggested_min','suggested_max')})
+            stats['histogram']=[]
+            stats['limited_evidence']=True
+            stats['pricing_note']='سال‌ها و تیپ‌ها جداگانه نمایش داده می‌شوند؛ میانگین کلی قابل استناد نیست.'
+    # Do not remove old model-years as outliers of newer model-years.
+    dropped_outliers=0 if broad_query else new_stats.get('outliers_removed',0)+used_stats.get('outliers_removed',0)
     if dropped_outliers:
         retained=set(new_stats.get('used_source_urls',[])+used_stats.get('used_source_urls',[]))
         for item in accepted:
@@ -1534,7 +1547,9 @@ def research_market(vehicle):
               'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim')} for x in displayable]
     return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
             'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
-            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v25-glance-ai-ux','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
+            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},
+            'model_overview':overview, 'engine':'v28-name-only-market',
+            'pricing_method':'آگهی‌های واقعی گروه‌بندی‌شده بر اساس سال، تیپ و وضعیت خودرو' }
 
 def resolve_search_vehicle(body: Search):
     """Resolve free-text manual searches before contacting paid/external sources.
@@ -1560,8 +1575,7 @@ def resolve_search_vehicle(body: Search):
     if mileage is None and spoken.get('is_new'):
         mileage = 0
     trim = (body.trim or '').strip() or spoken.get('trim') or None
-    if model == 'فیدلیتی' and not trim:
-        raise HTTPException(422,'تیپ فیدلیتی مشخص نیست. لطفاً پرایم، پرستیژ یا الیت را انتخاب یا در عبارت جست‌وجو وارد کنید.')
+    # Missing trim is fine for model-only queries; show separate trim groups.
     condition = (body.condition or '').strip() or spoken.get('condition') or None
     transmission = (body.transmission or '').strip() or spoken.get('transmission') or None
     color = (body.color or '').strip() or spoken.get('color') or None
@@ -1592,7 +1606,7 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
     # Price search context is structured and deterministic. Every market-relevant
     # field participates in the cache key, so different years/trim/mileage cannot
     # incorrectly share a cached quote.
-    key=json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
+    key='v28:'+json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
     with _cache_lock:
         cached=_cache.get(key)
         if cached and not body.refresh and time.time()-cached['at']<_effective_cache_ttl(cached['value']):

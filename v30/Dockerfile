@@ -23,4 +23,4 @@ USER davoodi
 EXPOSE 8000
 # Run this image twice on Liara: SERVICE_ROLE=web and SERVICE_ROLE=worker.
 # Each role bootstraps idempotently, protected by PostgreSQL advisory lock.
-CMD ["sh","-c","python -m scripts.bootstrap && if [ "${SERVICE_ROLE:-web}" = worker ]; then exec python -m backend.worker --loop; else exec uvicorn backend.api:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers; fi"]
+CMD ["python", "-m", "scripts.liara_entrypoint"]

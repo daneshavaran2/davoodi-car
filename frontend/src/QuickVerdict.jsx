@@ -8,6 +8,8 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
   const hasObserved=!quote && decision.observed!==null;
   const hasGroups=!quote && decision.priceGroups?.length>0;
   const hasPrice=quote||hasObserved||hasGroups;
+  const shownListings=hasGroups?decision.priceGroups.reduce((n,g)=>n+Number(g.count||0),0):decision.listings;
+  const shownSources=hasGroups?new Set(decision.priceGroups.flatMap(g=>g.source_urls||[]).map(u=>{try{return new URL(u).hostname}catch{return ''}}).filter(Boolean)).size:decision.domains;
   const statuses=(result?.site_status||[]).slice(0,6);
   const raw=Number(result?.diagnostics?.found||0);
   const accepted=Number(result?.diagnostics?.accepted||0);
@@ -28,7 +30,7 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
       {decision.range&&<p>بازه معمول آگهی‌ها: <b>{moneyFa(decision.range.min)} تا {moneyFa(decision.range.max)}</b></p>}
     </div>:hasGroups?<div className="quick-price-groups" data-testid="name-only-prices">
       {decision.priceGroups.map((g,i)=><div className="quick-price-group" key={[g.year,g.trim,g.condition,i].join('-')}>
-        <div className="quick-group-title">{[g.year&&('مدل '+Number(g.year).toLocaleString('fa-IR',{useGrouping:false})),g.trim,g.condition].filter(Boolean).join(' · ')}</div>
+        <div className="quick-group-title">{[g.year?('مدل '+Number(g.year).toLocaleString('fa-IR',{useGrouping:false})):'سال نامشخص',g.trim,g.condition,g.mileage_group].filter(Boolean).join(' · ')}</div>
         <strong>{moneyFa(g.price_min)}{g.price_min===g.price_max?'':' تا '+moneyFa(g.price_max)}</strong>
         <small>{Number(g.count).toLocaleString('fa-IR')} آگهی · بازه قیمت پیشنهادی</small>
         <div className="quick-group-links">{(g.source_urls||[]).slice(0,2).map((u,j)=><a key={j} href={u} target="_blank" rel="noopener noreferrer">مشاهده آگهی {Number(j+1).toLocaleString('fa-IR')} <ArrowUpLeft size={13}/></a>)}</div>
@@ -41,8 +43,8 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
       <small>تعداد آگهی مستقیم: {decision.observed.count.toLocaleString('fa-IR')} · نمونه محدود؛ قیمت قطعی بازار نیست.</small>
     </div>:<div className="quick-no-quote"><Info size={23}/><strong>فعلاً قیمت قابل استناد از آگهی‌های مشابه دریافت نشد.</strong></div>}
     <div className="quick-facts">
-      <span><b>{decision.listings.toLocaleString('fa-IR')}</b> آگهی مرتبط</span>
-      <span><b>{decision.domains.toLocaleString('fa-IR')}</b> سایت</span>
+      <span><b>{shownListings.toLocaleString('fa-IR')}</b> آگهی مرتبط</span>
+      <span><b>{shownSources.toLocaleString('fa-IR')}</b> سایت</span>
     </div>
     {!hasPrice&&<details className="market-source-diagnostics" data-testid="market-source-status">
       <summary>چرا قیمت پیدا نشد؟ · وضعیت منابع</summary>

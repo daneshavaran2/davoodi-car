@@ -518,3 +518,12 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 .deep-report{margin-top:10px}.deep-report>summary{cursor:pointer;display:flex;align-items:center;justify-content:center;min-height:52px;padding:14px;border:1px solid #cfae7757;border-radius:14px;background:#ffffff0b;color:#f5dfb8;font-weight:750;font-size:15px;list-style:none;text-align:center}.deep-report>summary::-webkit-details-marker{display:none}.deep-report[open]>summary{margin-bottom:15px}
 @media(max-width:620px){.quick-verdict{padding:16px;border-radius:16px;margin:3px 0 10px}.quick-decision-heading{font-size:23px}.quick-main-figure>strong{font-size:28px}.quick-buttons{width:100%;display:grid;grid-template-columns:1fr 1fr}.quick-buttons button{padding-inline:6px;font-size:12px}.quick-source-links a{flex:1;justify-content:center}.quick-facts span{flex:1 1 30%;min-width:85px;text-align:center;font-size:11px}.quick-facts b{display:block;margin:0 0 3px}.quick-bottom>span{width:100%}}
 @media print{.quick-verdict{background:#fff!important;color:#111!important;box-shadow:none!important}.quick-verdict *{color:#111!important}.deep-report{display:block!important}}
+
+/* v27: show source failures directly, not behind the deep-report fold. */
+.market-source-diagnostics{margin:12px 0;padding:13px 16px;border:1px solid rgba(233,185,80,.3);border-radius:12px;background:rgba(15,23,35,.24);line-height:1.8}
+.market-source-diagnostics>strong{display:block;margin-bottom:7px;font-size:.91rem;color:var(--text,#fff)}
+.market-source-pills{display:flex;flex-wrap:wrap;gap:6px;margin:5px 0 7px}
+.market-source-pills span{border:1px solid rgba(255,255,255,.2);border-radius:999px;padding:2px 9px;font-size:.75rem}
+.market-source-pills span.bad{border-color:rgba(255,105,105,.55);color:#ffc3c3}
+.market-source-pills span.good{border-color:rgba(100,210,140,.6);color:#aaf4c8}
+.market-source-diagnostics small{opacity:.83;font-size:.78rem}

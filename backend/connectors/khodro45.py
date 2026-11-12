@@ -8,14 +8,14 @@ DOMAIN='khodro45.com'
 
 def search(vehicle,limit=20):
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''
-    rows=[];seen=set()
+    rows=[];seen=set();errors=[]
     for path in ('price/','car-price/',''):
         if len(rows)>=limit:break
         try:raw=fetch_html(BASE+path,timeout=8)
         except RuntimeError as exc:
             if any(x in str(exc) for x in ('403','401','429','کپچا','captcha','مسدود')):
                 raise
-            continue
+            errors.append(str(exc)[:120]);continue
         for url,text in links_from_html(raw,BASE+path):
             if url in seen or not same_host(url,DOMAIN):continue
             if any(part in url for part in ('/mag/','/blog/','/news/','/review/')):continue
@@ -31,4 +31,5 @@ def search(vehicle,limit=20):
             rows.append({'url':url,'title':text,'content':text,'price':price,
                         'year':year_value(text),'mileage':mileage_value(text),'kind':'market_price'})
             if len(rows)>=limit:break
+    if not rows and errors:raise RuntimeError('صفحات مرجع خودرو۴۵ قابل دریافت نبودند: '+'؛ '.join(errors[:2]))
     return rows

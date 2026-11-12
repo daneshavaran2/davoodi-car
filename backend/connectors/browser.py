@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
+import re
 import threading
 from urllib.parse import urlsplit
 
@@ -18,7 +19,12 @@ _ALLOWED_HOSTS = frozenset({
 # The regex covers Bama, Hamrah Mechanic, Divar and reference-price pages.
 # Matching a link only signals hydration progress; normalizers still validate it.
 AD_LINK_READY_JS = r"""() => [...document.querySelectorAll('a[href]')].some(a =>
-    /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/v\/[^/]+\/[^/?#]+|\/price\//i.test(a.getAttribute('href') || ''))"""
+    /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/v\/(?:[^/?#]+\/)?[^/?#]+|\/price\//i.test(a.getAttribute('href') || ''))"""
+def _is_detail_page(url):
+    path=urlsplit(str(url)).path.lower()
+    return bool(re.search(r'/car/detail-|/v/(?:[^/]+/)?[^/]+/?$|/cars-for-sale/[^/]+/[^/]+/\d+/?$',path))
+
+
 _local = threading.local()
 # Each Chromium instance can use hundreds of MiB. Bound concurrent browser
 # launches across parallel user searches inside this application process.
@@ -100,15 +106,20 @@ class BrowserSession:
                 raise RuntimeError('صفحه منبع خطای HTTP ' + str(response.status) + ' دارد')
             if not _valid_public_url(self.page.url):
                 raise RuntimeError('صفحه به دامنه خارج از منابع مجاز هدایت شد')
-            # Wait for client-rendered listing links, including Divar's /v/ links.
-            # DOMContentLoaded alone is too early on hydrated marketplaces.
-            # Do not use networkidle; third-party analytics can remain active.
+            # Do not wait for listing links on detail pages: they normally
+            # have none, and the extra delay can exhaust the 105s API deadline.
+            is_detail=_is_detail_page(url)
             try:
-                self.page.wait_for_function(
-                    AD_LINK_READY_JS, timeout=min(2800, max(800, int(timeout * 320)))
-                )
+                if is_detail:
+                    self.page.wait_for_function(
+                        """() => !!document.querySelector('[itemprop="price"],[class*="price"],[class*="Price"],[data-testid*="price"]') ||
+                          /(?:قیمت|تومان|کارکرد)/.test(document.body?.innerText||'')""",
+                        timeout=min(1500,max(500,int(timeout*190))))
+                else:
+                    self.page.wait_for_function(
+                        AD_LINK_READY_JS, timeout=min(2800,max(800,int(timeout*320))))
             except Exception:
-                self.page.wait_for_timeout(350)
+                self.page.wait_for_timeout(250)
             title = (self.page.title() or '').lower()
             visible = (self.page.locator('body').inner_text(timeout=2000) or '')[:2500].lower()
             if any(k in title or k in visible for k in ('captcha', 'کپچا', 'تأیید کنید ربات نیستید', 'verify you are human')):

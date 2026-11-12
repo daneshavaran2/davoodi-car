@@ -20,6 +20,7 @@ AVALAI_KEY = os.getenv('AVALAI_API_KEY','')
 OPENAI_KEY = os.getenv('OPENAI_API_KEY','')
 OPENAI_MODEL = os.getenv('OPENAI_MODEL','gpt-4.1-mini')
 CACHE_TTL = int(os.getenv('SEARCH_CACHE_TTL', '900'))
+EMPTY_RESULT_CACHE_TTL = min(120,max(0,int(os.getenv('EMPTY_RESULT_CACHE_TTL','45'))))
 DB_PATH = os.getenv('DB_PATH','/app/data/davoodi.db')
 MAX_SEARCHES_PER_HOUR = int(os.getenv('MAX_SEARCHES_PER_HOUR','30'))
 SEARCH_COOLDOWN = int(os.getenv('SEARCH_COOLDOWN','12'))
@@ -724,7 +725,23 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'26.0.0-playwright-market'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'27.0.0-market-reliability'}
+
+@app.get('/api/browser-check')
+def browser_check(_=Depends(authorized)):
+    """On-demand Chromium JS smoke test on Liara; no third-party requests."""
+    from connectors.browser import BrowserSession
+    session=BrowserSession()
+    try:
+        session._start()
+        session.page.set_content('<div id="probe"></div><script>document.getElementById("probe").textContent="js-ok"</script>')
+        session.page.wait_for_function('document.getElementById("probe").textContent==="js-ok"',timeout=2500)
+        return {'status':'ok','browser':'chromium','javascript':'ok'}
+    except Exception as exc:
+        logging.warning('Browser smoke test failed: %s',exc)
+        raise HTTPException(503,detail='Chromium در Liara قابل اجرا نیست: '+str(exc).splitlines()[0][:160])
+    finally:
+        session.close()
 
 @app.get('/api/readiness')
 def readiness():
@@ -739,8 +756,9 @@ def readiness():
     return {'status':status,'database':database,'source_count':len(SOURCE_CONNECTORS),
             'fallback_configured':bool(AVALAI_KEY),
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
+            'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'26.0.0-playwright-market'}
+            'version':'27.0.0-market-reliability'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1084,7 +1102,7 @@ def _kind_from_url_title(url,title):
     # Explicit individual-ad URL patterns supported by current public sites.
     if 'bama.ir' in url and '/car/detail-' in path: return 'listing'
     if 'hamrah-mechanic.com' in url and re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',path): return 'listing'
-    if 'divar.ir' in url and re.search(r'/v/[^/]+/[\w-]+$',path): return 'listing'
+    if 'divar.ir' in url and re.fullmatch(r'/v/(?:[^/]+/)?[\w-]{4,}/?',path): return 'listing'
     if 'sheypoor.com' in url and re.search(r'/(s/|listing/|v/)[^/]+',path): return 'listing'
     if re.search(r'/(used-cars/|listing/|ads/|vehicles/)',path): return 'listing'
     # Search/category pages are discovery only, never evidence.
@@ -1174,7 +1192,9 @@ def _normalize_result(source,row,vehicle):
     if year is None: year=_year_from_text(title+' '+content)
     score,year_ok=_relevance(vehicle,title,content)
     rejection=None
-    if kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
+    if row.get('price_conflict'):rejection='قیمت کارت آگهی و صفحه جزئیات ناسازگار است'
+    elif row.get('detail_mismatch'):rejection='مشخصات صفحه جزئیات با کارت آگهی متفاوت است'
+    elif kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
     elif score<45: rejection='مدل/تیپ با خودروی درخواستی تطابق کافی ندارد'
     elif not year_ok: rejection='سال آگهی با سال درخواستی متفاوت است'
     elif price is None: rejection='قیمت صریح قابل استخراج نیست'
@@ -1186,7 +1206,8 @@ def _normalize_result(source,row,vehicle):
             'kind':kind,'price':int(price) if price else None,'mileage':mileage,'year':year,
             'relevance':score,'is_new':is_new,'accepted':rejection is None,'rejection_reason':rejection,
             'trim':row.get('trim') or variant_from_text(title+' '+content, vehicle.get('model')),'city':row.get('city'),
-            'condition':row.get('condition') or row.get('body_condition'),'color':row.get('color'),'published_at':row.get('published_at') or row.get('posted_at')}
+            'condition':row.get('condition') or row.get('body_condition'),'color':row.get('color'),'published_at':row.get('published_at') or row.get('posted_at'), 'detail_error':row.get('detail_error'),
+            'price_conflict':bool(row.get('price_conflict')), 'detail_mismatch':bool(row.get('detail_mismatch'))}
 
 def _direct_connector(source,vehicle):
     """Optional first-class connector. Expected JSON: {items:[{url,title,price,mileage,year,kind}]}.
@@ -1237,19 +1258,59 @@ def _fallback_query(vehicle,source):
     return f'site:{domain} {terms} {intent}'.strip()
 
 def _search_fallback_domain(vehicle,source):
-    """Search a single source. Returned rows are still evidence-filtered afterwards."""
+    """Discover URLs with the search provider, verify facts on the source page.
+
+    Search snippets are NOT evidence: they can be stale, omit mileage, or
+    contain a price from another ad. Accept only directly fetched source pages.
+    """
+    from urllib.parse import urlparse
+    from connectors.browser import source_session
+    from connectors.common import fetch_html, matches_model
+    from connectors.extract import detail_fields
     if not AVALAI_KEY:
-        raise RuntimeError('جست‌وجوی تکمیلی فعال نیست: AVALAI_API_KEY در تنظیمات سرور وارد نشده است')
+        raise RuntimeError('جست‌وجوی تکمیلی فعال نیست: AVALAI_API_KEY تنظیم نشده است')
     q=_fallback_query(vehicle,source)
-    key='market-v21:'+hashlib.sha256(q.casefold().encode()).hexdigest()
+    # New key keeps previously cached, unverified snippets out of pricing.
+    key='market-v27-verified:'+hashlib.sha256(q.casefold().encode()).hexdigest()
     hit=domain_saved(key,DOMAIN_CACHE_TTL)
     if hit:return hit.get('results',[])
     data=post_json('https://api.avalai.ir/v1/search/serper-search',{'query':q,'max_results':10,'hl':'fa'},
                    {'Authorization':'Bearer '+AVALAI_KEY},source['name']+' search fallback',timeout=18)
-    rows=data.get('results',[]) if isinstance(data,dict) else []
+    rows=(data.get('results') or data.get('organic') or data.get('organic_results') or
+          (data.get('data') or {}).get('results') or []) if isinstance(data,dict) else []
     if not isinstance(rows,list):rows=[]
-    domain_persist(key,{'results':rows,'query':q})
-    return rows
+    cap=max(1,min(10,int(os.getenv('MAX_FALLBACK_DETAIL_PAGES','5'))))
+    checked=[];errors=[];urls=set()
+    with source_session():
+        for row in rows:
+            if len(urls)>=cap:break
+            if not isinstance(row,dict):continue
+            url=str(row.get('url') or row.get('link') or '')
+            parsed=urlparse(url)
+            host=(parsed.hostname or '').lower().removeprefix('www.')
+            if parsed.scheme!='https' or not (host==source['domain'] or host.endswith('.'+source['domain'])):
+                continue
+            kind=_kind_from_url_title(url,str(row.get('title') or ''))
+            if kind=='article' or kind=='category' or url in urls:continue
+            urls.add(url)
+            try:
+                details=detail_fields(fetch_html(url,timeout=7))
+                title=details.get('title') or ''
+                content=details.get('content') or ''
+                if not matches_model(vehicle.get('brand'),vehicle.get('model'),title+' '+content):
+                    continue
+                if details.get('price') is None:
+                    continue
+                checked.append({'url':url,'title':title,'content':content,
+                    'price':details['price'],'year':details.get('year'),
+                    'mileage':details.get('mileage'),'published_at':details.get('published_at'),
+                    'kind':kind if kind=='listing' else 'market_price' if source['domain'] in ('khodro45.com','karnameh.com') else 'unknown'})
+            except (RuntimeError,ValueError,LookupError) as exc:
+                errors.append(str(exc)[:120])
+    if urls and not checked and len(errors)==len(urls):
+        raise RuntimeError('هیچ صفحه‌ای از نتایج جست‌وجو قابل خواندن نبود: '+'؛ '.join(errors[:2]))
+    if checked:domain_persist(key,{'results':checked,'query':q})
+    return checked
 
 def _weighted_stats(items,target_mileage=None):
     """v22: shared, evidence-aware, explainable price summary."""
@@ -1317,12 +1378,15 @@ def research_market(vehicle):
                 continue
             raw_count=len(rows[:50]);added=0
             for row in rows[:50]:
+                if not isinstance(row,dict):continue
                 item=_normalize_result(source,row,vehicle)
                 if not item['url'] or item['url'] in seen:continue
                 seen.add(item['url']);normalized.append(item);added+=1
             accepted_count=sum(1 for x in normalized if x['source']==source['name'] and x['accepted'])
-            statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector',
-                             'count':added,'raw_count':raw_count,'accepted_count':accepted_count,'mode':mode})
+            statuses.append({'name':source['name'],'domain':source['domain'],
+                             'status':'connector' if accepted_count else ('no_valid_evidence' if raw_count else 'no_results'),
+                             'count':added,'raw_count':raw_count,'accepted_count':accepted_count,
+                             'mode':mode})
             if accepted_count==0:fallback_sources.append(source)
 
     # 2) At most one focused fallback query per site, with a bounded worker
@@ -1348,6 +1412,7 @@ def research_market(vehicle):
                     rows=tasks[source['domain']].result()
                     raw_count=len(rows);added=0;accepted_now=0
                     for row in rows:
+                        if not isinstance(row,dict):continue
                         url=str(row.get('url') or row.get('link') or '')
                         try:host=(urlparse(url).hostname or '').lower().removeprefix('www.')
                         except ValueError:continue
@@ -1382,7 +1447,11 @@ def research_market(vehicle):
 
     # Merge connector + fallback attempts into one readable status row per source.
     merged_status={}
-    rank={'evidence':7,'searched':6,'connector':5,'no_results':4,'connector_error':3,'rate_limited':3,'error':3,'not_configured':2,'not_checked':2}
+    # A failed source must never be marked as "connected" simply because an
+    # earlier listing page returned HTTP 200 with no usable advertisements.
+    rank={'evidence':10,'rate_limited':9,'connector_error':9,'error':9,
+          'searched':8,'no_valid_evidence':7,'no_results':6,'connector':5,
+          'not_configured':3,'not_checked':2}
     for st in statuses:
         d=merged_status.setdefault(st['domain'],{'name':st['name'],'domain':st['domain'],'status':st['status'],
             'count':0,'raw_count':0,'accepted_count':0,'modes':[]})
@@ -1400,8 +1469,18 @@ def research_market(vehicle):
     assess_and_dedupe(normalized,vehicle,max_age_days=max(1,int(os.getenv('MAX_LISTING_AGE_DAYS','60'))))
     # Per-domain counts now reflect final accepted evidence, not only the raw parser output.
     for st in statuses:
-        st['accepted_count']=sum(x['accepted'] for x in normalized if x['domain']==st['domain'])
+        items=[x for x in normalized if x['domain']==st['domain']]
+        st['accepted_count']=sum(x['accepted'] for x in items)
+        st['rejected_count']=sum(not x['accepted'] for x in items)
+        st['detail_errors']=sum(bool(x.get('detail_error')) for x in items)
+        st['top_rejection_reasons']=[
+            {'reason':reason,'count':count} for reason,count in sorted(
+                ((reason,sum(x.get('rejection_reason')==reason for x in items)) for reason in
+                 set(x.get('rejection_reason') for x in items if x.get('rejection_reason'))),
+                key=lambda pair:-pair[1])[:3]]
         if st['accepted_count']:st['status']='evidence'
+        elif st['status'] in ('connector','searched','no_results') and items:
+            st['status']='no_valid_evidence'
     accepted=[x for x in normalized if x['accepted']]
     new_items=[x for x in accepted if x['is_new']]
     used_items=[x for x in accepted if not x['is_new']]
@@ -1435,11 +1514,15 @@ def research_market(vehicle):
     inaccessible=[s['name'] for s in statuses if s.get('status') in ('connector_error','rate_limited','error')]
     if inaccessible:warnings.append('دسترسی یا استخراج در منابع زیر ناموفق بود؛ این موضوع به معنای نبود آگهی نیست: '+ '، '.join(inaccessible[:4]))
     if not AVALAI_KEY:
-        warnings.append('کلید جست‌وجوی تکمیلی (AVALAI_API_KEY) تنظیم نشده است؛ برخی سایت‌ها تنها از طریق کانکتور عمومی بررسی شده‌اند.')
+        warnings.append('جست‌وجوی پشتیبان فعال نیست: AVALAI_API_KEY در تنظیمات سرور وجود ندارد. پوشش آگهی‌ها ممکن است ناقص باشد.')
     if fallback_errors:warnings.append('برخی جست‌وجوهای منبع کامل نشدند: '+' | '.join(fallback_errors[:3]))
     if len(accepted)<3:
         if accepted:warnings.append('شواهد واقعی بازار پیدا شد، اما کمتر از ۳ نمونه است؛ فقط قیمت‌های مشاهده‌شده نمایش داده می‌شوند و میانگین بازار صادر نمی‌شود.')
-        else:warnings.append('هیچ آگهی یا مرجع قیمتِ هم‌زمان مرتبط و قیمت‌دار پیدا نشد؛ برای جلوگیری از قیمت اشتباه برآورد ارائه نشد.')
+        else:
+            if diagnostics['found']:
+                warnings.append('آگهی‌های اولیه دریافت شد، اما همگی در بررسی مشخصات/قیمت رد شدند؛ جزئیات ردشدن را در گزارش منابع ببینید.')
+            else:
+                warnings.append('هیچ شاهد قیمت‌دار دریافت نشد. وضعیت هر سایت و خطاهای دسترسی را بررسی کنید؛ این وضعیت به معنی نبود خودرو در بازار نیست.')
     summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
     verified=set((new_stats.get('used_source_urls') or [])+(used_stats.get('used_source_urls') or []))
     # Do not expose obvious editorial/irrelevant pages as "source cards" in the UI.
@@ -1490,6 +1573,18 @@ def resolve_search_vehicle(body: Search):
     }
 
 
+def _has_price_evidence(value):
+    if not isinstance(value,dict):return False
+    return bool((value.get('diagnostics') or {}).get('accepted',0) or
+        (value.get('used') or {}).get('sample_count',0) or
+        (value.get('new') or {}).get('sample_count',0))
+
+
+def _effective_cache_ttl(value):
+    # Do not keep "zero data" results for 15 minutes when connectivity recovers.
+    return CACHE_TTL if _has_price_evidence(value) else EMPTY_RESULT_CACHE_TTL
+
+
 @app.post('/api/search')
 async def search(body:Search, request:Request, _=Depends(authorized)):
     vehicle=resolve_search_vehicle(body)
@@ -1500,10 +1595,10 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
     key=json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
     with _cache_lock:
         cached=_cache.get(key)
-        if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
+        if cached and not body.refresh and time.time()-cached['at']<_effective_cache_ttl(cached['value']):
             return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
-    previous=saved(key,None if body.refresh else CACHE_TTL)
-    if previous and not body.refresh:
+    previous=saved(key,None)
+    if previous and not body.refresh and time.time()-previous['at']<_effective_cache_ttl(previous['value']):
         return {**previous['value'],'cached':True,'checked_at':previous['at'],'history_id':previous['id']}
     client_key=_client_login_key(request)
     def work():
@@ -1513,7 +1608,7 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
             progress_report('شروع بررسی',0,0)
             with _cache_lock:
                 cached=_cache.get(key)
-                if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
+                if cached and not body.refresh and time.time()-cached['at']<_effective_cache_ttl(cached['value']):
                     return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
             try:
                 enforce_rate(client_key)
@@ -1533,7 +1628,7 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
                 with _cache_lock:
                     old=_cache.get(key)
                 if not old: old=saved(key,MAX_STALE_AGE)
-                if old and time.time()-old['at']<=MAX_STALE_AGE:
+                if old and _has_price_evidence(old['value']) and time.time()-old['at']<=MAX_STALE_AGE:
                     return {**old['value'],'cached':True,'stale':True,'checked_at':old['at'],'history_id':old.get('id'),
                             'warnings':old['value'].get('warnings',[])+['به دلیل محدودیت سرویس، آخرین نتیجه ذخیره‌شده نمایش داده می‌شود.']}
                 raise

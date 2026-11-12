@@ -31,6 +31,7 @@ jobs:
           python test_v23_quality.py
           python test_v24_safety.py
           python test_v26_playwright.py
+          python test_v27_reliability.py
   playwright-browser:
     runs-on: ubuntu-latest
     steps:
@@ -43,7 +44,7 @@ jobs:
       - name: Browser-rendered JS fixture test in real Chromium
         env:
           BROWSER_TEST_REQUIRED: '1'
-        run: cd backend && python test_v26_playwright.py
+        run: cd backend && python test_v26_playwright.py && python test_v27_reliability.py
   frontend:
     runs-on: ubuntu-latest
     steps:

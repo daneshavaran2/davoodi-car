@@ -5,6 +5,14 @@ import {makeQuickDecision,moneyFa} from './quickDecision.mjs';
 export default function QuickVerdict({result,onRefresh,onEdit}){
   const decision=makeQuickDecision(result);
   const quote=decision.estimate!==null;
+  const statuses=(result?.site_status||[]).slice(0,6);
+  const raw=Number(result?.diagnostics?.found||0);
+  const accepted=Number(result?.diagnostics?.accepted||0);
+  const sourceLabel={evidence:'شاهد معتبر',no_valid_evidence:'دریافت شد؛ رد شد',
+    no_results:'نتیجه مرتبط دریافت نشد',connector:'کانکتور پاسخ داد',
+    connector_error:'خطای اتصال/استخراج',rate_limited:'محدودیت دسترسی',
+    error:'خطای منبع',not_configured:'جست‌وجوی پشتیبان فعال نیست',
+    not_checked:'بررسی نشد',searched:'نتیجه جست‌وجو'};
   const date=typeof decision.checkedAt==='number' ? new Date(decision.checkedAt*1000).toLocaleString('fa-IR') : null;
   return <section className={'quick-verdict '+decision.kind} aria-label="نتیجه در یک نگاه" aria-live="polite">
     <div className="quick-verdict-top">
@@ -19,8 +27,19 @@ export default function QuickVerdict({result,onRefresh,onEdit}){
     <div className="quick-facts">
       <span><b>{decision.listings.toLocaleString('fa-IR')}</b> آگهی واقعی</span>
       <span><b>{decision.domains.toLocaleString('fa-IR')}</b> منبع مستقل</span>
-      <span><b>{decision.score===null?'نامشخص':decision.score.toLocaleString('fa-IR')+' / ۱۰۰'}</b> کیفیت داده</span>
+      <span><b>{decision.count===0||decision.score===null?'نامشخص':decision.score.toLocaleString('fa-IR')+' / ۱۰۰'}</b> کیفیت داده</span>
     </div>
+    {!quote&&<div className="market-source-diagnostics" data-testid="market-source-status" role="status">
+      <strong>{raw>0 ? `${raw.toLocaleString('fa-IR')} نتیجه اولیه؛ ${accepted.toLocaleString('fa-IR')} شاهد قابل استفاده` :
+        'اطلاعات قابل استفاده از منابع دریافت نشد'}</strong>
+      <div className="market-source-pills">{statuses.map((st,i)=>
+        <span key={st.domain||i} className={st.status==='evidence'?'good':st.status==='connector_error'||st.status==='rate_limited'||st.status==='error'?'bad':'neutral'}
+          title={[st.detail, ...(st.top_rejection_reasons||[]).map(r=>r.reason+': '+r.count)].filter(Boolean).join(' | ')}>
+          {st.name} · {sourceLabel[st.status]||st.status}
+          {st.raw_count>0&&` (${Number(st.raw_count).toLocaleString('fa-IR')} خام)`}
+        </span>)}</div>
+      <small>{raw>0?'برای جزئیات حذف نتایج، «گزارش کامل» را باز کنید.':'محدودیت دسترسی سایت، تنظیم‌نبودن جست‌وجوی پشتیبان یا ناتمام‌ماندن استخراج را در گزارش کامل بررسی کنید.'}</small>
+    </div>}
     <p className="quick-next"><b>قدم بعدی:</b> {decision.next}</p>
     {decision.evidenceLinks.length>0&&<div className="quick-source-links" aria-label="نمونه منابع معتبر">{decision.evidenceLinks.map(s=><a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer">{s.title}<ArrowUpLeft size={14}/></a>)}</div>}
     <div className="quick-bottom">

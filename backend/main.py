@@ -725,7 +725,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'26.0.0-playwright-market'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'27.0.0-market-reliability'}
 
 @app.get('/api/browser-check')
 def browser_check(_=Depends(authorized)):
@@ -758,7 +758,7 @@ def readiness():
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
             'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'26.0.0-playwright-market'}
+            'version':'27.0.0-market-reliability'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1276,7 +1276,8 @@ def _search_fallback_domain(vehicle,source):
     if hit:return hit.get('results',[])
     data=post_json('https://api.avalai.ir/v1/search/serper-search',{'query':q,'max_results':10,'hl':'fa'},
                    {'Authorization':'Bearer '+AVALAI_KEY},source['name']+' search fallback',timeout=18)
-    rows=data.get('results',[]) if isinstance(data,dict) else []
+    rows=(data.get('results') or data.get('organic') or data.get('organic_results') or
+          (data.get('data') or {}).get('results') or []) if isinstance(data,dict) else []
     if not isinstance(rows,list):rows=[]
     cap=max(1,min(10,int(os.getenv('MAX_FALLBACK_DETAIL_PAGES','5'))))
     checked=[];errors=[];urls=set()

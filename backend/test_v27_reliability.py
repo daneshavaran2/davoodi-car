@@ -104,6 +104,34 @@ class ExtractionV27Tests(unittest.TestCase):
         self.assertFalse(normalized['accepted'])
         self.assertIn('ناسازگار',normalized['rejection_reason'])
 
+    def test_name_only_input_does_not_require_year_mileage_or_trim(self):
+        from main import Search
+        car=main.resolve_search_vehicle(Search(query='فیدلیتی'))
+        self.assertEqual(car['model'],'فیدلیتی')
+        self.assertIsNone(car['year'])
+        self.assertIsNone(car['mileage'])
+        self.assertIsNone(car['trim'])
+
+    def test_name_only_price_groups_separate_year_trim_and_mileage(self):
+        vehicle={'query':'فیدلیتی','brand':'بهمن موتور','model':'فیدلیتی',
+                 'year':None,'mileage':None,'trim':None,'condition':None,'color':None,'city':None}
+        rows=[
+          {'url':'https://bama.ir/car/detail-111','title':'فیدلیتی پرایم مدل ۱۴۰۳ کارکرد ۴۰ هزار کیلومتر','price':2_400_000_000,'year':1403,'mileage':40000,'kind':'listing'},
+          {'url':'https://bama.ir/car/detail-222','title':'فیدلیتی پرایم مدل ۱۴۰۳ کارکرد ۹۰ هزار کیلومتر','price':2_300_000_000,'year':1403,'mileage':90000,'kind':'listing'},
+          {'url':'https://bama.ir/car/detail-333','title':'فیدلیتی پرستیژ مدل ۱۴۰۲ کارکرد ۴۰ هزار کیلومتر','price':3_000_000_000,'year':1402,'mileage':40000,'kind':'listing'},
+        ]
+        source={'name':'باما','domain':'bama.ir','env':'BAMA_CONNECTOR_URL'}
+        with patch.object(main,'SOURCE_CONNECTORS',[source]), \
+             patch.object(main,'_direct_connector',return_value=rows), \
+             patch.object(main,'AVALAI_KEY',''), \
+             patch.object(main,'OPENAI_KEY',''):
+            report=main.research_market(vehicle)
+        groups=report['price_groups']
+        self.assertEqual(len(groups),3)
+        self.assertEqual(len({(g['year'],g['trim'],g['mileage_group']) for g in groups}),3)
+        self.assertEqual({g['price_min'] for g in groups},{2_400_000_000,2_300_000_000,3_000_000_000})
+        self.assertTrue(all(g['source_urls'] for g in groups))
+
     def test_empty_result_short_cache_ttl(self):
         self.assertLessEqual(main._effective_cache_ttl({'diagnostics':{'accepted':0}}),120)
         self.assertEqual(main._effective_cache_ttl({'diagnostics':{'accepted':1}}),main.CACHE_TTL)

@@ -77,16 +77,9 @@ def token_score(brand,model,text):
     return sum(1 for z in set(toks) if z in t)/len(set(toks))
 
 def explicit_price(text):
-    t=norm(text).replace(',','').replace('٬','')
-    vals=[]
-    for m in re.finditer(r'(?<!\d)(\d+(?:\.\d+)?)\s*میلیارد(?:\s*(?:و|،)?\s*(\d+(?:\.\d+)?)\s*میلیون)?\s*تومان?',t):
-        v=float(m.group(1))*1_000_000_000
-        if m.group(2):v+=float(m.group(2))*1_000_000
-        vals.append(int(v))
-    for m in re.finditer(r'(?<!\d)(\d{7,13})\s*تومان',t):
-        vals.append(int(m.group(1)))
-    vals=[x for x in vals if 50_000_000<=x<=100_000_000_000]
-    return vals[0] if vals else None
+    # Shared conservative parser; do not accidentally choose commission as price.
+    from market_parsers import parse_price
+    return parse_price(text)
 
 def year_value(text):
     t=norm(text)
@@ -104,3 +97,66 @@ def mileage_value(text):
             v=int(m.group(1))
             if 0<=v<=2_000_000:return v
     return None
+
+# v24: Read only structured, explicitly published metadata from public pages.
+# Crawling date != publication date; never fabricate listing freshness.
+def structured_listing_fields(raw):
+    from market_parsers import publication_date, parse_price, parse_mileage
+    from html.parser import HTMLParser
+    class Metadata(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.in_ld=False;self.buffer=[];self.scripts=[];self.metadata={}
+        def handle_starttag(self,tag,attrs):
+            a=dict(attrs)
+            if tag=='script' and 'ld+json' in a.get('type','').lower():
+                self.in_ld=True;self.buffer=[]
+            if tag=='meta':
+                name=(a.get('property') or a.get('name') or a.get('itemprop') or '').lower()
+                if name in ('article:published_time','datepublished','dateposted','product:release_date'):
+                    self.metadata[name]=a.get('content','')
+            if tag=='time' and a.get('datetime'):
+                self.metadata['time']=a['datetime']
+        def handle_data(self,data):
+            if self.in_ld:self.buffer.append(data)
+        def handle_endtag(self,tag):
+            if tag=='script' and self.in_ld:
+                self.scripts.append(''.join(self.buffer));self.in_ld=False
+    p=Metadata()
+    try:p.feed(raw[:2_000_000])
+    except Exception:return {}
+    nodes=[]
+    def traverse(data,depth=0):
+        if depth>5:return
+        if isinstance(data,list):
+            for e in data:traverse(e,depth+1)
+        elif isinstance(data,dict):
+            nodes.append(data)
+            for k in ('@graph','mainEntity','itemOffered','offers'):
+                if k in data:traverse(data[k],depth+1)
+    for block in p.scripts:
+        try: traverse(json.loads(html.unescape(block)))
+        except (json.JSONDecodeError,ValueError): pass
+    result={}
+    for node in nodes:
+        if not result.get('published_at'):
+            for key in ('datePosted','datePublished','dateCreated','uploadDate'):
+                if node.get(key):
+                    parsed=publication_date(node[key])
+                    if parsed:result['published_at']=parsed;break
+        if not result.get('price') and node.get('@type') in ('Offer','AggregateOffer'):
+            v=node.get('price') or node.get('lowPrice')
+            unit=str(node.get('priceCurrency') or '').upper()
+            if isinstance(v,(str,int,float)) and v:
+                raw_value=str(v).replace(',','').translate(FA_DIGITS).strip()
+                if re.fullmatch(r'\d+(?:\.\d+)?',raw_value):
+                    amount=float(raw_value)
+                    if unit=='IRR':amount/=10
+                    # Prices without an explicit currency cannot be normalized reliably.
+                    if unit in ('IRR','IRT','TOMAN') and 50_000_000<=amount<=100_000_000_000:
+                        result['price']=round(amount)
+    if not result.get('published_at'):
+        for value in p.metadata.values():
+            parsed=publication_date(value)
+            if parsed:result['published_at']=parsed;break
+    return result

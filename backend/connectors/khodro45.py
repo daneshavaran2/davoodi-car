@@ -1,5 +1,5 @@
 import re
-from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value
+from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value,structured_listing_fields
 BASE='https://khodro45.com/'
 DOMAIN='khodro45.com'
 
@@ -18,7 +18,16 @@ def search(vehicle,limit=20):
             price=explicit_price(text)
             if price and url not in seen:
                 seen.add(url)
-                rows.append({'url':url,'title':text,'content':text,'price':price,
-                             'year':year_value(text),'mileage':mileage_value(text),'kind':'market_price'})
+                meta={}; description=text
+                if len(rows)<4:
+                    try:
+                        detail=fetch_html(url,timeout=5)
+                        meta=structured_listing_fields(detail)
+                        description=text_from_html(detail)[:1800]
+                    except (RuntimeError,KeyError,ValueError):pass
+                rows.append({'url':url,'title':text,'content':description,
+                             'price':meta.get('price') or price,
+                             'year':year_value(text+' '+description),'mileage':mileage_value(text+' '+description),
+                             'published_at':meta.get('published_at'),'kind':'market_price'})
             if len(rows)>=limit:return rows
     return rows

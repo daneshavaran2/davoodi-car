@@ -1,5 +1,6 @@
-name: Davoodi Car QA
+name: Davoodi Car v24 Verification
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -28,6 +29,9 @@ jobs:
           python test_v21_market_fix.py
           python test_v22_intelligence.py
           python test_v23_quality.py
+          python test_v24_release.py
+          cd ..
+          python qa/test_static_serving_v24.py
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -45,4 +49,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify deployable Dockerfile
-        run: docker build -t davoodi-car:v23 .
+        run: docker build -t davoodi-car:v24 .

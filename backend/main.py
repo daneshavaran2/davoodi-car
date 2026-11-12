@@ -1,15 +1,17 @@
-import os, json, time, hmac, hashlib, base64, re, asyncio, logging, threading, random, sqlite3, statistics
+import os, json, time, hmac, hashlib, base64, re, asyncio, logging, threading, random, sqlite3, statistics, secrets, uuid, contextvars
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
-from fastapi import FastAPI, HTTPException, Depends, Header, Query
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from connectors import run as run_builtin_connector
 from market_intelligence import assess_and_dedupe, price_summary
 from vehicle_nlp import identify_vehicle, generation_from_text, variant_from_text
+from market_parsers import parse_price, parse_mileage, extract_trim, extract_transmission, extract_condition, is_new_vehicle, publication_date
 
 logging.basicConfig(level=logging.INFO)
 app = FastAPI(title='Davoodi Car')
@@ -24,30 +26,40 @@ MAX_SEARCHES_PER_HOUR = int(os.getenv('MAX_SEARCHES_PER_HOUR','30'))
 SEARCH_COOLDOWN = int(os.getenv('SEARCH_COOLDOWN','12'))
 DOMAIN_CACHE_TTL = int(os.getenv('DOMAIN_CACHE_TTL','21600'))
 SEARCH_REQUEST_DELAY = float(os.getenv('SEARCH_REQUEST_DELAY','0'))
-MAX_DOMAIN_REQUESTS = min(10,max(1,int(os.getenv('MAX_DOMAIN_REQUESTS','5'))))
+MAX_DOMAIN_REQUESTS = min(10,max(1,int(os.getenv('MAX_DOMAIN_REQUESTS','6'))))
+STALE_MAX_AGE = min(86400, max(CACHE_TTL, int(os.getenv('STALE_MAX_AGE_SECONDS','21600'))))
+JOB_MAX_PENDING = min(100,max(1,int(os.getenv('JOB_MAX_PENDING','12'))))
+LOGIN_MAX_ATTEMPTS = max(3,min(20,int(os.getenv('LOGIN_MAX_ATTEMPTS','5'))))
+LOGIN_LOCK_SECONDS = max(60,min(3600,int(os.getenv('LOGIN_LOCK_SECONDS','900'))))
 _rate_lock = threading.Lock()
-_recent_calls = []
-_last_search = [0.0]
+_recent_calls = {}
+_last_search = {}
 
 _cache = {}
 _cache_lock = threading.Lock()
-_search_semaphore = threading.BoundedSemaphore(1)
+_search_semaphore = threading.BoundedSemaphore(min(4,max(1,int(os.getenv('CONCURRENT_SEARCHES','3')))))
+_progress_context = contextvars.ContextVar('source_progress',default=None)
+_job_executor = ThreadPoolExecutor(max_workers=min(4,max(1,int(os.getenv('CONCURRENT_SEARCHES','3')))))
 if not PASSWORD or not SECRET or len(SECRET)<32:
     raise RuntimeError('Set ADMIN_PASSWORD and SESSION_SECRET (32+ characters) in Liara environment')
 
 def sign(value): return hmac.new(SECRET.encode(),value.encode(),hashlib.sha256).hexdigest()
 def make_token():
-    value=str(int(time.time())+8*3600)
+    value=str(int(time.time())+8*3600)+'.'+secrets.token_urlsafe(18)
     return value+'.'+sign(value)
 def authorized(authorization: str|None=Header(default=None)):
     if not authorization or not authorization.startswith('Bearer '): raise HTTPException(401,'ابتدا وارد شوید')
     token=authorization[7:]
     try:
-        expiry,signature=token.split('.',1)
-        valid=int(expiry)>time.time() and hmac.compare_digest(sign(expiry),signature)
+        expiry,nonce,signature=token.split('.',2)
+        valid=int(expiry)>time.time() and hmac.compare_digest(sign(expiry+'.'+nonce),signature)
     except (ValueError,TypeError): valid=False
     if not valid: raise HTTPException(401,'نشست منقضی شده است')
-    return True
+    token_hash=hashlib.sha256(token.encode()).hexdigest()
+    with db() as c:
+        revoked=c.execute('SELECT token_hash FROM revoked_sessions WHERE token_hash=?',(token_hash,)).fetchone()
+    if revoked:raise HTTPException(401,'نشست از حساب خارج شده است')
+    return token_hash[:32]
 class Login(BaseModel): password: str
 class Search(BaseModel):
     query: str=Field(min_length=2,max_length=180)
@@ -79,6 +91,11 @@ def db():
     c.execute('CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL, cache_key TEXT NOT NULL, result_json TEXT NOT NULL, created_at REAL NOT NULL)')
     c.execute('CREATE TABLE IF NOT EXISTS domain_cache(cache_key TEXT PRIMARY KEY, result_json TEXT NOT NULL, created_at REAL NOT NULL)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_search_key ON searches(cache_key, created_at DESC)')
+    c.execute('CREATE TABLE IF NOT EXISTS login_attempts(client_key TEXT PRIMARY KEY, fails INTEGER NOT NULL, window_start REAL NOT NULL, locked_until REAL NOT NULL)')
+    c.execute('CREATE TABLE IF NOT EXISTS search_jobs(id TEXT PRIMARY KEY, owner TEXT NOT NULL, status TEXT NOT NULL, progress INTEGER NOT NULL, detail TEXT NOT NULL, site_status TEXT NOT NULL, result_json TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL)')
+    c.execute('CREATE TABLE IF NOT EXISTS revoked_sessions(token_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_search_jobs_owner ON search_jobs(owner,created_at DESC)')
+    c.execute('PRAGMA journal_mode=WAL')
     c.commit()
     return c
 def saved(key,age=None):
@@ -348,7 +365,7 @@ def parse_voice(text):
     t=re.sub(r'\s+',' ',text.translate(FA_DIGITS).replace('ي','ی').replace('ك','ک').replace('‌',' ')).strip()
     t=correct_spoken_vehicle_name(t)
     low=t.lower()
-    is_new=bool(re.search(r'(?<!\w)(?:نو|صفر|صفر\s*کیلومتر|آکبند|اکبند|خشک)(?!\w)',low))
+    is_new=is_new_vehicle(low,parse_mileage(low))
     aliases=[('چری','تیگو ۷ پرو مکس',[r'تیگو\s*(?:7|۷|هفت)\s*پرو\s*مکس',r'tiggo\s*7\s*pro\s*max']),('چری','تیگو ۷ پرو',[r'تیگو\s*(?:7|۷|هفت)\s*پرو',r'tiggo\s*7\s*pro']),('چری','تیگو ۷',[r'تیگو\s*(?:7|۷|هفت)',r'tiggo\s*[- ]?7',r'چری\s*تیگو\s*هفت']),('چری','تیگو ۸ پرو',[r'تیگو\s*(?:8|۸|هشت)\s*پرو',r'tiggo\s*8\s*pro']),('چری','تیگو ۸',[r'تیگو\s*(?:8|۸|هشت)',r'tiggo\s*[- ]?8']),('سیتروئن','C4',[r'(?<![a-z0-9])c\s*[- ]?4(?![a-z0-9])',r'سی\s*فور',r'سی\s*چهار',r'سیتروئن\s*سی\s*(?:فور|چهار|4)',r'citroen\s*c4']),('سیتروئن','C3',[r'(?<![a-z0-9])c\s*[- ]?3(?![a-z0-9])',r'سی\s*تری',r'سی\s*سه']),('بی ام و','X3',[r'(?<![a-z0-9])x\s*3(?![a-z0-9])',r'ایکس\s*(?:تری|سه|3)']),('هیوندای','سانتافه',[r'سانتافه',r'سانتافایه',r'santafe',r'santa\s*fe']),('هیوندای','توسان',[r'توسان',r'tucson']),('کیا','اسپورتیج',[r'اسپورتیج',r'sportage']),('تویوتا','کمری',[r'کمری',r'camry']),('پژو','۲۰۷',[r'(?<!\d)207(?!\d)',r'دویست\s*و\s*هفت',r'دو\s*صفر\s*هفت',r'دو\s*صفر\s*هفت',r'تو\s*اُ\s*سون']),('پژو','۲۰۶',[r'(?<!\d)206(?!\d)',r'دویست\s*و\s*شش',r'دو\s*صفر\s*شش']),('ایران خودرو','دنا پلاس',[r'دنا\s*پلاس']),('ایران خودرو','تارا',[r'تارا']),('سایپا','شاهین',[r'شاهین']),('کیا','سراتو',[r'سراتو']),('هیوندای','النترا',[r'النترا'])]
     # Common brand aliases, including speech-to-text variations in Persian/English.
     # Match longer/more specific models first, then fall back to the brand alone.
@@ -536,27 +553,10 @@ def parse_voice(text):
                 continue
             year=value
             break
-    mileage=None
-    # Parse mileage only when the speech actually includes a mileage context.
-    km_context=r'(?:کیلومتر|کیلومتر\s*کارکرد|تا\s*کار(?:کرد)?|کارکرد|کار\s*کرده|رفته)'
-    m=re.search(r'(?<!\d)(\d{1,7})\s*هزار\s*(?:تا\s*)?'+km_context,low)
-    if m:mileage=int(m.group(1))*1000
-    if mileage is None:
-        m=re.search(r'(?<!\d)(\d{1,7})\s*'+km_context,low)
-        if m:mileage=int(m.group(1))
-    if mileage is None:
-        m=re.search(r'(?<![\w])(?:یک\s+)?هزار\s*(?:تا\s*)?'+km_context,low)
-        if m:mileage=1000
-    if mileage is None:
-        m=re.search(r'((?:یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|بیست|سی|چهل|پنجاه|شصت|هفتاد|هشتاد|نود|صد|دویست|سیصد|چهارصد|پانصد|و|\s)+)\s+هزار\s*(?:تا\s*)?'+km_context,low)
-        if m:
-            n=spoken_number(m.group(1).split())
-            if n is not None and 1<=n<=999:mileage=n*1000
-    # Explicit mileage wins if a 4-digit number is followed by «تا کارکرد».
-    # A year must be introduced by «مدل/سال/ساخت» and must not borrow mileage digits.
-    # Keep an explicit calendar year, even when mileage is mentioned next.
-    # A number in a mileage phrase alone must not become the model year.
-    if is_new:mileage=0
+    mileage=parse_mileage(low)
+    # Inconsistent 'zero + positive km' never resets the actual mileage.
+    if isinstance(mileage,int) and mileage>0: is_new=False
+    if is_new and mileage is None:mileage=0
     condition=None
     if any(x in low for x in ['بدون رنگ','بی رنگ','بیرنگ','فابریک']):condition='بدون رنگ'
     elif 'گلگیر' in low or 'گل گیر' in low:
@@ -663,6 +663,7 @@ def parse_voice(text):
         questions.append('سال ساخت خودرو چند است؟')
     elif mileage is None and not is_new:
         questions.append('کارکرد خودرو چند کیلومتر است؟')
+    missing=[name for name,missing_value in [('مدل خودرو',not model),('سال تولید',not year),('کارکرد',mileage is None),('تیپ',needs_trim),('وضعیت بدنه',not condition)] if missing_value]
     return {'questions':questions,'brand':brand,'model':model,'year':year,'mileage':mileage,'condition':condition,'trim':trim,'needs_trim':needs_trim,'missing':missing,'transcript':t,'body_parts':body_parts,'color':car_color,'transmission':transmission,'is_new':is_new,'generation':generation,'model_suggestion':suggestion,'recognition_alias':identified['alias'] if identified and identified['type']=='alias' else None}
 
 class VoiceInput(BaseModel):
@@ -671,17 +672,56 @@ class VoiceInput(BaseModel):
 def voice_parse(body:VoiceInput,_=Depends(authorized)):
     return parse_voice(body.text)
 
-def enforce_rate():
-    now=time.time()
+def enforce_rate(caller='legacy'):
+    """Per-session limit, not one global lock shared by every employee."""
+    now=time.monotonic()
     with _rate_lock:
-        _recent_calls[:]=[t for t in _recent_calls if now-t<3600]
-        if len(_recent_calls)>=MAX_SEARCHES_PER_HOUR: raise RuntimeError('سقف استعلام ساعتی پر شده است؛ از تاریخچه استفاده کنید.')
-        if now-_last_search[0]<SEARCH_COOLDOWN: raise RuntimeError('برای کاهش مصرف API، چند ثانیه بعد دوباره تلاش کنید یا از تاریخچه استفاده کنید.')
-        _recent_calls.append(now)
-        _last_search[0]=now
+        calls=[t for t in _recent_calls.get(caller,[]) if now-t<3600]
+        if len(calls)>=MAX_SEARCHES_PER_HOUR:
+            raise RuntimeError('سقف استعلام ساعتی این نشست پر شده است؛ از تاریخچه استفاده کنید.')
+        if calls and now-_last_search.get(caller,0)<SEARCH_COOLDOWN:
+            raise RuntimeError('برای کاهش مصرف API، چند ثانیه بعد دوباره تلاش کنید یا از تاریخچه استفاده کنید.')
+        calls.append(now)
+        _recent_calls[caller]=calls
+        _last_search[caller]=now
+        if len(_recent_calls)>2000:
+            expired=[k for k,v in _recent_calls.items() if not v or now-v[-1]>3600]
+            for k in expired: _recent_calls.pop(k,None);_last_search.pop(k,None)
+
+def _login_key(request):
+    # Do not trust user-provided X-Forwarded-For directly. Uvicorn proxy headers
+    # must only trust the deployment proxy.
+    ip=request.client.host if request.client else 'unknown'
+    return hmac.new(SECRET.encode(),ip.encode(),hashlib.sha256).hexdigest()[:40]
+
+def _check_login_limit(client_key):
+    now=time.time()
+    with db() as c:
+        row=c.execute('SELECT fails,window_start,locked_until FROM login_attempts WHERE client_key=?',(client_key,)).fetchone()
+    if row and row['locked_until']>now:
+        raise HTTPException(429, 'تلاش‌های ورود بیش از حد مجاز است؛ چند دقیقه دیگر دوباره امتحان کنید.', headers={'Retry-After':str(max(1,int(row['locked_until']-now)))})
+
+def _record_login_attempt(client_key,success):
+    now=time.time()
+    with db() as c:
+        if success:
+            c.execute('DELETE FROM login_attempts WHERE client_key=?',(client_key,))
+            return
+        row=c.execute('SELECT fails,window_start FROM login_attempts WHERE client_key=?',(client_key,)).fetchone()
+        fails=(row['fails']+1) if row and now-row['window_start']<LOGIN_LOCK_SECONDS else 1
+        start=row['window_start'] if row and now-row['window_start']<LOGIN_LOCK_SECONDS else now
+        locked_until=now+LOGIN_LOCK_SECONDS if fails>=LOGIN_MAX_ATTEMPTS else 0
+        c.execute('INSERT OR REPLACE INTO login_attempts VALUES (?,?,?,?)',(client_key,fails,start,locked_until))
+        c.execute('DELETE FROM login_attempts WHERE window_start<?',(now-LOGIN_LOCK_SECONDS*4,))
+
+def _emit_source_status(source, status):
+    cb=_progress_context.get()
+    if cb:
+        try:cb(source,status)
+        except Exception:logging.exception('progress callback failed')
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'23.0.0-search-qa-ux'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'24.0.0-release-candidate','price_policy':'verified-evidence-only'}
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
 # Images are separate from market-price sources and never treated as price evidence.
@@ -913,9 +953,23 @@ def brand_logo(query: str=Query(min_length=2,max_length=180), _:bool=Depends(aut
         logging.info('Brand logo lookup unavailable: %s',exc)
     return wikidata_brand_logo(brand) or {'brand':brand,'logo_url':None,'note':'لوگو در Commons و Wikidata یافت نشد یا سرور به این سرویس‌ها دسترسی ندارد.'}
 
+@app.post('/api/logout')
+def logout(authorization:str|None=Header(default=None),_=Depends(authorized)):
+    token=(authorization or '').removeprefix('Bearer ').strip()
+    try: expiry=int(token.split('.',1)[0])
+    except (ValueError,TypeError): expiry=int(time.time())+8*3600
+    with db() as c:
+        c.execute('INSERT OR REPLACE INTO revoked_sessions VALUES (?,?)',(hashlib.sha256(token.encode()).hexdigest(),expiry))
+        c.execute('DELETE FROM revoked_sessions WHERE expires_at<?',(time.time(),))
+    return {'ok':True}
+
 @app.post('/api/login')
-def login(body:Login):
-    if not hmac.compare_digest(body.password.encode(),PASSWORD.encode()): raise HTTPException(401,'رمز عبور اشتباه است')
+def login(body:Login, request:Request):
+    key=_login_key(request)
+    _check_login_limit(key)
+    ok=hmac.compare_digest(body.password.encode(),PASSWORD.encode())
+    _record_login_attempt(key,ok)
+    if not ok: raise HTTPException(401,'نام کاربری یا رمز عبور نامعتبر است')
     return {'token':make_token(),'expires_in':28800}
 
 def post_json(url,payload,headers,service='سرویس خارجی',timeout=32):
@@ -956,42 +1010,11 @@ def _norm_text(value):
     return re.sub(r'\s+',' ',value).strip()
 
 def _price_from_text(text):
-    """Extract explicit asking price from title/snippet and normalize to toman."""
-    t=_norm_text(text).replace(',','').replace('٬','')
-    if re.search(r'(پیش[ -]?پرداخت|اقساط|قسط|ودیعه)',t):
-        return None
-    vals=[]; occupied=[]
-    # Compound Persian price: «۲ میلیارد و ۸۰۰ میلیون تومان».
-    for m in re.finditer(r'(?<!\d)(\d+(?:\.\d+)?)\s*میلیارد(?:\s*(?:و|،)?\s*(\d+(?:\.\d+)?)\s*میلیون)?\s*(?:تومان)?',t):
-        v=float(m.group(1))*1_000_000_000
-        if m.group(2): v+=float(m.group(2))*1_000_000
-        vals.append(int(v)); occupied.append(m.span())
-    def overlaps(span): return any(span[0]<b and span[1]>a for a,b in occupied)
-    for pat,mul in [(r'(?<!\d)(\d+(?:\.\d+)?)\s*میلیون\s*(?:تومان)?',1_000_000),
-                    (r'(?<!\d)(\d{7,13})\s*تومان',1),
-                    (r'(?<!\d)(\d{8,14})\s*ریال',0.1)]:
-        for m in re.finditer(pat,t):
-            if overlaps(m.span()):continue
-            try:v=int(float(m.group(1))*mul)
-            except (ValueError,OverflowError):continue
-            vals.append(v)
-    vals=[v for v in vals if 50_000_000<=v<=100_000_000_000]
-    return vals[-1] if vals else None
+    """Conservative multi-amount parser; fees/downpayments never become vehicle prices."""
+    return parse_price(text)
 
 def _mileage_from_text(text):
-    t=_norm_text(text).replace(',','').replace('٬','')
-    patterns=[
-      r'(?:کارکرد|کار\s*کرد)\s*[:\-]?\s*(\d{1,7})(?:\s*(?:کیلومتر|km))?',
-      r'(?<!\d)(\d{1,7})\s*(?:کیلومتر|km)(?:\s*(?:کارکرد|کار\s*کرده))?',
-      r'(?<!\d)(\d{1,3})\s*هزار\s*(?:تا\s*)?(?:کارکرد|کار|کیلومتر)',
-      r'(?<!\d)(\d{1,7})\s*تا\s*(?:کارکرد|کار\s*کرده)',
-    ]
-    for i,pat in enumerate(patterns):
-        m=re.search(pat,t)
-        if not m:continue
-        v=int(m.group(1))*(1000 if i==2 else 1)
-        if 0<=v<=2_000_000:return v
-    return None
+    return parse_mileage(text)
 
 def _year_from_text(text):
     t=_norm_text(text)
@@ -1090,9 +1113,11 @@ def _normalize_result(source,row,vehicle):
     content=str(row.get('content') or row.get('snippet') or row.get('description') or '')[:2200]
     kind=str(row.get('kind') or _kind_from_url_title(url,title))
     price=_structured_number(row.get('price'),kind='price')
-    if price is None: price=_price_from_text(title+' '+content)
+    if price is None: price=_price_from_text(title+' ؛ '+content)
     # A source cannot turn an editorial URL into a listing by labeling it as one.
-    if _kind_from_url_title(url,title)=='article': kind='article'
+    url_kind=_kind_from_url_title(url,title)
+    if url_kind in ('article','category'):kind=url_kind
+    elif url_kind=='unknown' and kind=='listing':kind='unknown'
     if kind=='unknown' and source['domain'] in ('khodro45.com','karnameh.com') and price is not None:
         # These sources may expose reference-price pages without a stable listing URL pattern.
         # Editorial/category pages were already excluded by the classifier above.
@@ -1110,11 +1135,19 @@ def _normalize_result(source,row,vehicle):
     host=(urlparse(url).hostname or '').lower().removeprefix('www.')
     if not (host == source['domain'] or host.endswith('.' + source['domain'])):
         rejection='لینک منبع خارج از دامنه رسمی سایت است'
-    is_new=(row.get('is_new') is True or bool(re.search(r'\b(صفر|صفرکیلومتر|صفر کیلومتر|تحویل فوری)\b',_norm_text(title+' '+content))) or mileage==0)
+    is_new=is_new_vehicle(title+' '+content,mileage,row.get('is_new'))
+    detected_trim=extract_trim(vehicle.get('model'),title+' '+content)
+    observed_trim=str(row.get('trim') or detected_trim or '').strip() or None
+    observed_transmission=str(row.get('transmission') or extract_transmission(title+' '+content) or '').strip() or None
+    observed_condition=str(row.get('condition') or extract_condition(title+' '+content) or '').strip() or None
+    # Prefer explicit publication timestamp supplied by an authorized source.
+    published_at=publication_date(row.get('published_at') or row.get('posted_at') or row.get('datePublished'))
     return {'source':source['name'],'domain':host or source['domain'],'url':url,'title':title,'content':content,
             'kind':kind,'price':int(price) if price else None,'mileage':mileage,'year':year,
             'relevance':score,'is_new':is_new,'accepted':rejection is None,'rejection_reason':rejection,
-            'trim':row.get('trim'),'city':row.get('city'),'published_at':row.get('published_at') or row.get('posted_at')}
+            'trim':observed_trim,'transmission':observed_transmission,'condition':observed_condition,
+            'city':row.get('city'),'published_at':published_at,
+            'observed_at':datetime.now(timezone.utc).isoformat()}
 
 def _direct_connector(source,vehicle):
     """Optional first-class connector. Expected JSON: {items:[{url,title,price,mileage,year,kind}]}.
@@ -1146,9 +1179,7 @@ def _search_terms(vehicle):
     year=vehicle.get('year')
     if isinstance(year,int):
         parts.append(year)
-        # Iranian marketplaces may index the same model-year in Gregorian or Solar-Hijri form.
-        if 1900<=year<=2100: parts.append(year-621)
-        elif 1300<=year<=1500: parts.append(year+621)
+        # Search original year alone; alternate calendar is a separate query.
     terms=' '.join(str(x) for x in parts if x and str(x).strip())
     return terms or str(vehicle.get('query') or '').strip()
 
@@ -1168,15 +1199,29 @@ def _search_fallback_domain(vehicle,source):
     """Search a single source. Returned rows are still evidence-filtered afterwards."""
     if not AVALAI_KEY:
         raise RuntimeError('جست‌وجوی تکمیلی فعال نیست: AVALAI_API_KEY در تنظیمات سرور وارد نشده است')
-    q=_fallback_query(vehicle,source)
-    key='market-v21:'+hashlib.sha256(q.casefold().encode()).hexdigest()
-    hit=domain_saved(key,DOMAIN_CACHE_TTL)
-    if hit:return hit.get('results',[])
-    data=post_json('https://api.avalai.ir/v1/search/serper-search',{'query':q,'max_results':10,'hl':'fa'},
+    year=vehicle.get('year')
+    variants=[vehicle]
+    if isinstance(year,int):
+        other=(year-621 if year>=1900 else year+621)
+        variants.append({**vehicle,'year':other})
+    # Query alternative calendar only when original finds no page. This avoids
+    # requiring both 2025 AND 1404 in the same search expression.
+    rows=[]
+    for variant in variants:
+        q=_fallback_query(variant,source)
+        key='market-v24:'+hashlib.sha256(q.casefold().encode()).hexdigest()
+        hit=domain_saved(key,DOMAIN_CACHE_TTL)
+        if hit:
+            results=hit.get('results',[])
+        else:
+            data=post_json('https://api.avalai.ir/v1/search/serper-search',
+                   {'query':q,'max_results':10,'hl':'fa'},
                    {'Authorization':'Bearer '+AVALAI_KEY},source['name']+' search fallback',timeout=18)
-    rows=data.get('results',[]) if isinstance(data,dict) else []
-    if not isinstance(rows,list):rows=[]
-    domain_persist(key,{'results':rows,'query':q})
+            results=data.get('results',[]) if isinstance(data,dict) else []
+            if not isinstance(results,list):results=[]
+            domain_persist(key,{'results':results,'query':q})
+        rows.extend(results)
+        if rows:break
     return rows
 
 def _weighted_stats(items,target_mileage=None):
@@ -1210,33 +1255,36 @@ def _explain_market(vehicle,new_stats,used_stats,diagnostics):
 
 def research_market(vehicle):
     from urllib.parse import urlparse
+    started_at=time.perf_counter()
     statuses=[]; normalized=[]; seen=set(); fallback_sources=[]
     # 1) Independent public/official connectors in parallel. Waiting for each
     # site sequentially could exceed the 105-second API deadline.
     from concurrent.futures import ThreadPoolExecutor
 
     def fetch_primary(source):
+        start=time.perf_counter()
         try:
             rows = _direct_connector(source, vehicle)
             mode = 'external'
             if rows is None:
                 rows = _builtin_connector(source, vehicle)
                 mode = 'builtin_public'
-            return rows, mode, None
+            return rows, mode, None, round((time.perf_counter()-start)*1000)
         except RuntimeError as exc:
-            return None, 'builtin_or_external', str(exc)[:120]
+            return None, 'builtin_or_external', str(exc)[:120], round((time.perf_counter()-start)*1000)
         except Exception as exc:
             logging.exception('Source connector failure: %s', source['domain'])
-            return None, 'builtin_or_external', 'خطای غیرمنتظره در کانکتور'
+            return None, 'builtin_or_external', 'خطای غیرمنتظره در کانکتور', round((time.perf_counter()-start)*1000)
 
     with ThreadPoolExecutor(max_workers=min(3,len(SOURCE_CONNECTORS))) as executor:
         tasks={source['domain']:executor.submit(fetch_primary,source) for source in SOURCE_CONNECTORS}
         for source in SOURCE_CONNECTORS:
-            rows,mode,error=tasks[source['domain']].result()
+            rows,mode,error,duration=tasks[source['domain']].result()
             if error:
                 statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector_error',
-                                 'count':0,'raw_count':0,'accepted_count':0,'mode':mode,'detail':error})
+                                 'count':0,'raw_count':0,'accepted_count':0,'mode':mode,'detail':error,'duration_ms':duration})
                 fallback_sources.append(source)
+                _emit_source_status(source['domain'],'connector_error')
                 continue
             if rows is None:
                 fallback_sources.append(source)
@@ -1248,7 +1296,8 @@ def research_market(vehicle):
                 seen.add(item['url']);normalized.append(item);added+=1
             accepted_count=sum(1 for x in normalized if x['source']==source['name'] and x['accepted'])
             statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector',
-                             'count':added,'raw_count':raw_count,'accepted_count':accepted_count,'mode':mode})
+                             'count':added,'raw_count':raw_count,'accepted_count':accepted_count,'mode':mode,'duration_ms':duration})
+            _emit_source_status(source['domain'],'connector')
             if accepted_count==0:fallback_sources.append(source)
 
     # 2) At most one focused fallback query per site, with a bounded worker
@@ -1257,6 +1306,7 @@ def research_market(vehicle):
     for source in fallback_sources:
         if source['domain'] not in searched_domains:
             searched_domains.add(source['domain']);dedup.append(source)
+    # All configured sources must be marked independently; a source not tried is not 'no listing'.
     candidates=dedup[:MAX_DOMAIN_REQUESTS]
     if AVALAI_KEY and candidates:
         # Enforce sequential requests when a nonzero per-request delay has been
@@ -1264,12 +1314,13 @@ def research_market(vehicle):
         workers=1 if SEARCH_REQUEST_DELAY>0 else min(3,len(candidates))
         def fetch_fallback(index,source):
             if SEARCH_REQUEST_DELAY>0 and index:time.sleep(SEARCH_REQUEST_DELAY)
-            return _search_fallback_domain(vehicle,source)
+            start=time.perf_counter()
+            return _search_fallback_domain(vehicle,source),round((time.perf_counter()-start)*1000)
         with ThreadPoolExecutor(max_workers=workers) as executor:
             tasks={source['domain']:executor.submit(fetch_fallback,i,source) for i,source in enumerate(candidates)}
             for source in candidates:
                 try:
-                    rows=tasks[source['domain']].result()
+                    rows,fallback_duration=tasks[source['domain']].result()
                     raw_count=len(rows);added=0;accepted_now=0
                     for row in rows:
                         url=str(row.get('url') or row.get('link') or '')
@@ -1282,35 +1333,41 @@ def research_market(vehicle):
                         if item['accepted']:accepted_now+=1
                     statuses.append({'name':source['name'],'domain':source['domain'],
                                      'status':'searched' if added else 'no_results','count':added,'raw_count':raw_count,
-                                     'accepted_count':accepted_now,'mode':'focused_search_fallback'})
+                                     'accepted_count':accepted_now,'mode':'focused_search_fallback','duration_ms':fallback_duration})
+                    _emit_source_status(source['domain'],'fallback_complete')
                 except RuntimeError as exc:
                     msg=str(exc);fallback_errors.append(source['name']+': '+msg)
                     statuses.append({'name':source['name'],'domain':source['domain'],
                                      'status':'rate_limited' if '429' in msg or 'محدود' in msg else 'error',
                                      'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
                                      'detail':msg[:120]})
+                    _emit_source_status(source['domain'],'fallback_error')
                 except Exception:
                     logging.exception('Source fallback failure: %s',source['domain'])
                     fallback_errors.append(source['name']+': خطای اتصال')
                     statuses.append({'name':source['name'],'domain':source['domain'],'status':'error',
                                      'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
                                      'detail':'خطای غیرمنتظره اتصال'})
+                    _emit_source_status(source['domain'],'fallback_error')
     else:
         for source in candidates:
             statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_configured',
                              'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
                              'detail':'جست‌وجوی تکمیلی غیرفعال: AVALAI_API_KEY تنظیم نشده است'})
+            _emit_source_status(source['domain'],'not_configured')
     for source in dedup[MAX_DOMAIN_REQUESTS:]:
         statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_checked',
                          'count':0,'raw_count':0,'accepted_count':0,'mode':'fallback_budget'})
+        _emit_source_status(source['domain'],'not_checked')
 
     # Merge connector + fallback attempts into one readable status row per source.
     merged_status={}
     rank={'evidence':6,'searched':5,'connector':4,'no_results':3,'not_configured':2,'not_checked':2,'connector_error':1,'rate_limited':1,'error':1}
     for st in statuses:
         d=merged_status.setdefault(st['domain'],{'name':st['name'],'domain':st['domain'],'status':st['status'],
-            'count':0,'raw_count':0,'accepted_count':0,'modes':[]})
+            'count':0,'raw_count':0,'accepted_count':0,'duration_ms':0,'modes':[]})
         d['count']+=int(st.get('count') or 0); d['raw_count']+=int(st.get('raw_count') or 0)
+        d['duration_ms']+=int(st.get('duration_ms') or 0)
         d['accepted_count']+=int(st.get('accepted_count') or 0)
         if st.get('mode') and st['mode'] not in d['modes']:d['modes'].append(st['mode'])
         if rank.get(st['status'],0)>rank.get(d['status'],0):d['status']=st['status']
@@ -1324,7 +1381,13 @@ def research_market(vehicle):
     # Per-domain counts now reflect final accepted evidence, not only the raw parser output.
     for st in statuses:
         st['accepted_count']=sum(x['accepted'] for x in normalized if x['domain']==st['domain'])
-        if st['accepted_count']:st['status']='evidence'
+        # A pre-validation candidate is NOT valid evidence. Never keep the
+        # 'evidence' badge after strict freshness/trim/condition filtering.
+        if st['accepted_count']:
+            st['status']='evidence'
+        elif st['status']=='evidence':
+            st['status']='searched' if st.get('raw_count') else 'no_results'
+        _emit_source_status(st['domain'],st['status'])
     accepted=[x for x in normalized if x['accepted']]
     new_items=[x for x in accepted if x['is_new']]
     used_items=[x for x in accepted if not x['is_new']]
@@ -1351,16 +1414,26 @@ def research_market(vehicle):
         else:warnings.append('هیچ آگهی یا مرجع قیمتِ هم‌زمان مرتبط و قیمت‌دار پیدا نشد؛ برای جلوگیری از قیمت اشتباه برآورد ارائه نشد.')
     summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
     verified=set((new_stats.get('used_source_urls') or [])+(used_stats.get('used_source_urls') or []))
+    for item in normalized:
+        item['pricing_state']=('used' if item['url'] in verified else 'rejected' if not item['accepted'] else 'not_used')
+    diagnostics['priced_count']=len(verified)
+    diagnostics['pending_review_count']=sum(bool(x.get('review_required')) for x in normalized)
     # Do not expose obvious editorial/irrelevant pages as "source cards" in the UI.
     displayable=[x for x in normalized if x['accepted']]
+    review_candidates=[{'title':x['title'],'url':x['url'],'domain':x['domain'],
+             'reason':x['rejection_reason'],'price':x.get('price'),
+             'published_at':x.get('published_at')} for x in normalized
+             if x.get('review_required') and x.get('kind') in ('listing','market_price')][:12]
     sources=[{'title':x['title'],'url':x['url'],'category':x['source'],'kind':x['kind'],'domain':x['domain'],
               'price':x['price'],'mileage':x['mileage'],'year':x['year'],'relevance':x['relevance'],
               'accepted':x['accepted'],'rejection_reason':x['rejection_reason'],
               'quality_score':x.get('quality_score',0),'evidence_tier':x.get('evidence_tier'),
-              'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim')} for x in displayable]
+              'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim'),
+              'transmission':x.get('transmission'),'condition':x.get('condition'),
+              'pricing_state':x.get('pricing_state'),'review_required':x.get('review_required',False)} for x in displayable]
     return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
-            'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
-            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v23-search-qa-ux','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
+            'warnings':warnings,'review_candidates':review_candidates,'site_status':statuses,'duration_ms':round((time.perf_counter()-started_at)*1000),'verified_source_urls':list(verified),'diagnostics':diagnostics,
+            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v24-verified-market','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
 
 def resolve_search_vehicle(body: Search):
     """Resolve free-text manual searches before contacting paid/external sources.
@@ -1390,6 +1463,16 @@ def resolve_search_vehicle(body: Search):
     transmission = (body.transmission or '').strip() or spoken.get('transmission') or None
     color = (body.color or '').strip() or spoken.get('color') or None
     city = (body.city or '').strip() or None
+    # Ask exactly one actionable clarification before running a paid search.
+    if model=='فیدلیتی' and not trim:
+        raise HTTPException(422,'تیپ فیدلیتی مشخص نیست؛ لطفاً پرایم، پرستیژ یا الیت را وارد کنید.')
+    if year is None:
+        raise HTTPException(422,'سال ساخت خودرو مشخص نیست؛ لطفاً سال دقیق را وارد کنید.')
+    if mileage is None:
+        raise HTTPException(422,'کارکرد خودرو مشخص نیست؛ تعداد کیلومتر یا «صفر کیلومتر» را وارد کنید.')
+    # A used-car quote without body condition could mix repaired and clean cars.
+    if mileage>0 and (not condition or condition in ('نامشخص','تعیین نشده')):
+        raise HTTPException(422,'وضعیت بدنه خودرو مشخص نیست؛ آن را در «مشخصات بیشتر» انتخاب کنید (مثلاً بدون رنگ).')
     return {
         'query': raw, 'brand': brand, 'model': model, 'year': year,
         'mileage': mileage, 'condition': condition, 'transmission': transmission,
@@ -1404,7 +1487,7 @@ async def search(body:Search, _=Depends(authorized)):
     # Price search context is structured and deterministic. Every market-relevant
     # field participates in the cache key, so different years/trim/mileage cannot
     # incorrectly share a cached quote.
-    key=json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
+    key='v24:'+json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
     with _cache_lock:
         cached=_cache.get(key)
         if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
@@ -1419,7 +1502,7 @@ async def search(body:Search, _=Depends(authorized)):
                 if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
                     return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
             try:
-                enforce_rate()
+                enforce_rate(_)
                 value=research_market(vehicle)
                 now=time.time()
                 history_id=persist(query,key,value)
@@ -1432,10 +1515,10 @@ async def search(body:Search, _=Depends(authorized)):
             except RuntimeError:
                 with _cache_lock:
                     old=_cache.get(key)
-                if not old: old=saved(key)
-                if old:
+                if not old: old=saved(key,STALE_MAX_AGE)
+                if not body.refresh and old and time.time()-old['at']<=STALE_MAX_AGE:
                     return {**old['value'],'cached':True,'stale':True,'checked_at':old['at'],'history_id':old.get('id'),
-                            'warnings':old['value'].get('warnings',[])+['به دلیل محدودیت سرویس، آخرین نتیجه ذخیره‌شده نمایش داده می‌شود.']}
+                            'warnings':old['value'].get('warnings',[])+['نتیجه قدیمی است و قیمت فعلی بازار محسوب نمی‌شود؛ زمان ثبت را بررسی کنید.']}
                 raise
     try: return await asyncio.wait_for(asyncio.to_thread(work),timeout=105)
     except asyncio.TimeoutError: raise HTTPException(504,'جستجو بیش از حد طول کشید')
@@ -1443,6 +1526,71 @@ async def search(body:Search, _=Depends(authorized)):
     except Exception:
         logging.exception('Search failure')
         raise HTTPException(502,'خطای پردازش پاسخ سرویس‌های خارجی')
+
+
+# ---------- Persistent search jobs / true per-source progress ----------
+def _write_job(job_id, **updates):
+    allowed={'status','progress','detail','site_status','result_json','error'}
+    fields={k:v for k,v in updates.items() if k in allowed}
+    if not fields:return
+    fields['updated_at']=time.time()
+    with db() as c:
+        c.execute('UPDATE search_jobs SET '+', '.join(k+'=?' for k in fields)+' WHERE id=?',(*fields.values(),job_id))
+
+def _run_job(job_id,body,caller):
+    completed=set()
+    statuses={}
+    def progress(domain,status):
+        # Count actual completed domain phases, never fake timer percentage.
+        statuses[domain]=status
+        completed.add(domain)
+        _write_job(job_id,progress=min(92,10+int(len(completed)/len(SOURCE_CONNECTORS)*82)),
+                   site_status=json.dumps(statuses,ensure_ascii=False),detail='بررسی منابع: '+str(len(completed))+' از '+str(len(SOURCE_CONNECTORS)))
+    token=_progress_context.set(progress)
+    try:
+        _write_job(job_id,status='running',progress=5,detail='بررسی مشخصات و شروع جست‌وجوی منابع')
+        # Existing search() maintains compatible cache/history and timeout policy.
+        value=asyncio.run(search(body,caller))
+        _write_job(job_id,status='completed',progress=100,detail='گزارش آماده است',
+                   result_json=json.dumps(value,ensure_ascii=False))
+    except HTTPException as exc:
+        _write_job(job_id,status='failed',progress=100,detail='جست‌وجو موفق نبود',error=str(exc.detail))
+    except Exception:
+        logging.exception('background search failed')
+        _write_job(job_id,status='failed',progress=100,detail='خطای داخلی',error='پردازش جست‌وجو ممکن نشد')
+    finally:
+        _progress_context.reset(token)
+
+@app.post('/api/search/jobs',status_code=202)
+def search_job_start(body:Search, owner=Depends(authorized)):
+    # Validate before consuming worker resources or paid searches.
+    resolve_search_vehicle(body)
+    with db() as c:
+        pending=c.execute("SELECT COUNT(*) FROM search_jobs WHERE status IN ('queued','running') AND created_at>?",(time.time()-240,)).fetchone()[0]
+        if pending>=JOB_MAX_PENDING:
+            raise HTTPException(429,'جست‌وجوهای هم‌زمان زیاد است؛ کمی بعد دوباره امتحان کنید')
+        job_id=str(uuid.uuid4())
+        now=time.time()
+        c.execute('INSERT INTO search_jobs(id,owner,status,progress,detail,site_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+                  (job_id,owner,'queued',0,'در صف جست‌وجو','{}',now,now))
+        c.execute('DELETE FROM search_jobs WHERE created_at<?',(now-7*86400,))
+    _job_executor.submit(_run_job,job_id,body,owner)
+    return {'job_id':job_id,'status':'queued','progress':0,'poll_url':'/api/search/jobs/'+job_id}
+
+@app.get('/api/search/jobs/{job_id}')
+def search_job_read(job_id:str,owner=Depends(authorized)):
+    try: uuid.UUID(job_id)
+    except ValueError: raise HTTPException(404,'شناسه جست‌وجو نامعتبر است')
+    with db() as c:
+        row=c.execute('SELECT * FROM search_jobs WHERE id=? AND owner=?',(job_id,owner)).fetchone()
+    if not row:raise HTTPException(404,'گزارش جست‌وجو پیدا نشد')
+    if row['status'] in ('queued','running') and time.time()-row['created_at']>150:
+        _write_job(job_id,status='failed',progress=100,detail='مهلت جست‌وجو پایان یافت',error='منابع در مهلت مشخص پاسخ ندادند؛ دوباره تلاش کنید')
+        with db() as c:row=c.execute('SELECT * FROM search_jobs WHERE id=?',(job_id,)).fetchone()
+    return {'job_id':job_id,'status':row['status'],'progress':row['progress'],
+            'detail':row['detail'],'source_status':json.loads(row['site_status']),
+            'result':json.loads(row['result_json']) if row['result_json'] else None,
+            'error':row['error'],'created_at':row['created_at'],'updated_at':row['updated_at']}
 
 @app.get('/api/history')
 def history(limit:int=20,_=Depends(authorized)):
@@ -1466,7 +1614,11 @@ def compare(body:CompareInput,_=Depends(authorized)):
     if len(rows)!=len(set(body.ids)) or any(r['cache_key'].startswith('domain:') for r in rows): raise HTTPException(404,'برخی گزارش‌ها پیدا نشدند')
     return {'items':[{'id':r['id'],'query':r['query'],'checked_at':r['created_at'],'new':json.loads(r['result_json']).get('new'),'used':json.loads(r['result_json']).get('used')} for r in rows]}
 
-FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(Path(__file__).resolve().parent.parent/'frontend'/'dist')))
+_backend_dir = Path(__file__).resolve().parent
+# Docker copies the Vite output to /app/frontend/dist; local source layout
+# stores it alongside backend in ../frontend/dist. Honor explicit env first.
+_default_frontend_dist = (_backend_dir / 'frontend' / 'dist') if (_backend_dir / 'frontend' / 'dist').is_dir() else (_backend_dir.parent / 'frontend' / 'dist')
+FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(_default_frontend_dist)))
 if (FRONTEND_DIST/'assets').is_dir():
     app.mount('/assets', StaticFiles(directory=str(FRONTEND_DIST/'assets')), name='assets')
 @app.get('/{path:path}')

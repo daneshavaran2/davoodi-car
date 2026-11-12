@@ -1,16 +1,17 @@
 import re
-from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value
+from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value,structured_listing_fields
 BASE='https://www.hamrah-mechanic.com/cars-for-sale/'
 DOMAIN='hamrah-mechanic.com'
 
 def _detail(url,vehicle):
-    raw=fetch_html(url,timeout=6); text=text_from_html(raw)
+    raw=fetch_html(url,timeout=6); text=text_from_html(raw); meta=structured_listing_fields(raw)
     title=''
     m=re.search(r'(?:خرید و فروش\s+)?([^|]{3,140}?)(?:\s+با ضمانت|\s+[–|-]\s+همراه مکانیک|$)',text)
     if m:title=m.group(1).strip()
     if not title:title=text[:180]
-    return {'url':url,'title':title,'content':text[:5000],'price':explicit_price(text),
-            'year':year_value(text),'mileage':mileage_value(text),'kind':'listing'}
+    return {'url':url,'title':title,'content':text[:5000],'price':meta.get('price') or explicit_price(text),
+            'year':year_value(text),'mileage':mileage_value(text),
+            'published_at':meta.get('published_at'),'kind':'listing'}
 
 def search(vehicle,limit=25):
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''

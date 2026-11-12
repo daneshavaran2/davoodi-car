@@ -1,5 +1,5 @@
 import re
-from .common import fetch_html,links_from_html,norm,token_score,explicit_price,year_value,mileage_value
+from .common import fetch_html,links_from_html,norm,token_score,explicit_price,year_value,mileage_value,structured_listing_fields,text_from_html
 BASE='https://bama.ir'
 DOMAIN='bama.ir'
 
@@ -33,7 +33,18 @@ def search(vehicle,limit=30):
     for url,text in links_from_html(raw,page_url):
         if 'bama.ir/car/detail-' not in url:continue
         if token_score(brand,model,text)<(.45 if model else .35):continue
-        rows.append({'url':url,'title':text,'content':text,'price':explicit_price(text),
-                     'year':year_value(text),'mileage':mileage_value(text),'kind':'listing'})
+        # Verification on the detail page is bounded; link text alone has no
+        # trustworthy publication date. A blocked detail page stays unverified.
+        metadata={}; description=text
+        if len(rows)<5:
+            try:
+                detail_html=fetch_html(url,timeout=5)
+                metadata=structured_listing_fields(detail_html)
+                description=text_from_html(detail_html)[:2500]
+            except (RuntimeError,KeyError,ValueError):pass
+        rows.append({'url':url,'title':text,'content':description,
+                     'price':metadata.get('price') or explicit_price(text),
+                     'year':year_value(text+' '+description),'mileage':mileage_value(text+' '+description),
+                     'published_at':metadata.get('published_at'),'kind':'listing'})
         if len(rows)>=limit:break
     return rows

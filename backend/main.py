@@ -1192,7 +1192,9 @@ def _normalize_result(source,row,vehicle):
     if year is None: year=_year_from_text(title+' '+content)
     score,year_ok=_relevance(vehicle,title,content)
     rejection=None
-    if kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
+    if row.get('price_conflict'):rejection='قیمت کارت آگهی و صفحه جزئیات ناسازگار است'
+    elif row.get('detail_mismatch'):rejection='مشخصات صفحه جزئیات با کارت آگهی متفاوت است'
+    elif kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
     elif score<45: rejection='مدل/تیپ با خودروی درخواستی تطابق کافی ندارد'
     elif not year_ok: rejection='سال آگهی با سال درخواستی متفاوت است'
     elif price is None: rejection='قیمت صریح قابل استخراج نیست'
@@ -1204,7 +1206,8 @@ def _normalize_result(source,row,vehicle):
             'kind':kind,'price':int(price) if price else None,'mileage':mileage,'year':year,
             'relevance':score,'is_new':is_new,'accepted':rejection is None,'rejection_reason':rejection,
             'trim':row.get('trim') or variant_from_text(title+' '+content, vehicle.get('model')),'city':row.get('city'),
-            'condition':row.get('condition') or row.get('body_condition'),'color':row.get('color'),'published_at':row.get('published_at') or row.get('posted_at'), 'detail_error':row.get('detail_error')}
+            'condition':row.get('condition') or row.get('body_condition'),'color':row.get('color'),'published_at':row.get('published_at') or row.get('posted_at'), 'detail_error':row.get('detail_error'),
+            'price_conflict':bool(row.get('price_conflict')), 'detail_mismatch':bool(row.get('detail_mismatch'))}
 
 def _direct_connector(source,vehicle):
     """Optional first-class connector. Expected JSON: {items:[{url,title,price,mileage,year,kind}]}.

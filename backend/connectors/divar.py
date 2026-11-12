@@ -29,8 +29,24 @@ def search(vehicle,limit=25):
     url='https://divar.ir/s/'+city+'/car?q='+quote(term,safe='')
     raw=fetch_html(url,timeout=9)
     cards=listing_cards_from_html(raw,url,_is_detail,limit=max(100,limit*4))
-    result=[];max_detail=min(limit,int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')))
+    # If the targeted query finds no matching cards, retry a broader query.
+    # A year/trim-specific Divar query may have too few indexed matches.
+    if not any(matches_model(vehicle.get('brand'),model,c['title']+' '+c['content']) for c in cards):
+        queries=[]
+        if vehicle.get('trim'):queries.append(model+' '+str(vehicle['trim']))
+        queries.append(model)
+        for term2 in dict.fromkeys(queries):
+            if term2==term:continue
+            query_url='https://divar.ir/s/'+city+'/car?q='+quote(term2,safe='')
+            more=fetch_html(query_url,timeout=8)
+            found=listing_cards_from_html(more,query_url,_is_detail,limit=max(100,limit*4))
+            cards.extend(found)
+            if any(matches_model(vehicle.get('brand'),model,c['title']+' '+c['content']) for c in found):
+                break
+    result=[];seen=set();max_detail=min(limit,int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')))
     for card in cards:
+        if card['url'] in seen:continue
+        seen.add(card['url'])
         if not matches_model(vehicle.get('brand'),model,card['title']+' '+card['content']):continue
         if len(result)<max_detail:
             try:

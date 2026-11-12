@@ -40,6 +40,7 @@ jobs:
         run: |
           node qa/test_frontend.cjs
           node qa/test_v24_ux.cjs
+          node qa/test_v25_quick_glance.mjs
       - run: cd frontend && npm install --no-audit --no-fund
       - run: cd frontend && npm run build
   docker:
@@ -48,4 +49,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify deployable Dockerfile
-        run: docker build -t davoodi-car:v24 .
+        run: docker build -t davoodi-car:v25 .

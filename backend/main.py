@@ -724,7 +724,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'24.0.0-quality-security'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'25.0.0-glance-ai-ux'}
 
 @app.get('/api/readiness')
 def readiness():
@@ -737,7 +737,7 @@ def readiness():
         database='error'
     status='ready' if database=='ok' else 'unavailable'
     return {'status':status,'database':database,'source_count':len(SOURCE_CONNECTORS),
-            'fallback_configured':bool(AVALAI_KEY),'version':'24.0.0-quality-security'}
+            'fallback_configured':bool(AVALAI_KEY),'version':'25.0.0-glance-ai-ux'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1446,7 +1446,7 @@ def research_market(vehicle):
               'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim')} for x in displayable]
     return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
             'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
-            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v24-quality-security','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
+            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v25-glance-ai-ux','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
 
 def resolve_search_vehicle(body: Search):
     """Resolve free-text manual searches before contacting paid/external sources.

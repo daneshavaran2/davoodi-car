@@ -16,6 +16,18 @@ assert.ok(moneyFa(5_950_000_000).includes('میلیارد'));
 // Two listings, even with a stray average field: never release a market estimate.
 const limited=makeQuickDecision({...good,used:{...good.used,sample_count:2,listing_count:2}});
 assert.equal(limited.kind,'limited'); assert.equal(limited.estimate,null);
+// Simple-price view: show observed asking prices, not an invented market quote.
+const sparseUrls=['https://bama.ir/car/detail-111','https://bama.ir/car/detail-222'];
+const sparse=makeQuickDecision({...good,used:{sample_count:2,listing_count:2,domain_count:1,price_average:null,used_source_urls:sparseUrls},
+  sources:sparseUrls.map((url,i)=>({url,kind:'listing',accepted:true,price:[2_400_000_000,2_600_000_000][i],category:'باما'}))});
+assert.equal(sparse.estimate,null);
+assert.deepEqual(sparse.observed,{min:2_400_000_000,max:2_600_000_000,count:2});
+const single=makeQuickDecision({...good,used:{sample_count:1,listing_count:1,price_average:null,used_source_urls:[sparseUrls[0]]},
+  sources:[{url:sparseUrls[0],kind:'listing',accepted:true,price:2_400_000_000}]});
+assert.deepEqual(single.observed,{min:2_400_000_000,max:2_400_000_000,count:1});
+const untrusted=makeQuickDecision({...good,used:{sample_count:1,listing_count:1,price_average:null,used_source_urls:[sparseUrls[0]]},
+  sources:[{url:sparseUrls[0],kind:'listing',accepted:false,price:9_000_000_000}]});
+assert.equal(untrusted.observed,null);
 // Unknown model cannot be assigned a quote from a past/corrupt cached result.
 const missingModel=makeQuickDecision({...good,vehicle:{...v,model:null}});
 assert.equal(missingModel.estimate,null);
@@ -44,4 +56,4 @@ assert.ok(component.includes('نتیجه در یک نگاه'));
 assert.ok(component.includes('aria-live="polite"'));
 assert.ok(css.includes('@media(max-width:620px){.quick-verdict'));
 assert.ok(main.indexOf('<QuickVerdict result={result}')<main.indexOf('<MarketDashboard result={result}'));
-console.log('v25 quick decision: 8 scenario checks + 6 UX safety contracts OK');
+console.log('quick price decision: market estimate + sparse asking-price safety scenarios OK');

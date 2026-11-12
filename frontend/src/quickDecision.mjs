@@ -22,23 +22,36 @@ export function makeQuickDecision(result) {
   const min = stats.suggested_min;
   const max = stats.suggested_max;
   const validRange = priced && typeof min === 'number' && typeof max === 'number' && min > 0 && max >= min;
+  // In sparse markets show only verified asking prices actually visible in
+  // accepted direct sale listings. This is NOT an estimated transaction price.
+  // Group URLs come from the backend's accepted after-filter sample.
+  const acceptedUrls = new Set(stats.used_source_urls || []);
+  const directListings = group && v.model ? (result?.sources || []).filter(s =>
+    s?.accepted === true && s.kind === 'listing' && acceptedUrls.has(s.url) &&
+    typeof s.url === 'string' && /^https:\/\//.test(s.url) &&
+    typeof s.price === 'number' && Number.isFinite(s.price) &&
+    s.price >= 50_000_000 && s.price <= 100_000_000_000) : [];
+  const observedPrices = directListings.map(s=>s.price).sort((a,b)=>a-b);
+  const observed = !priced && observedPrices.length
+    ? {min:observedPrices[0],max:observedPrices[observedPrices.length-1],count:observedPrices.length}
+    : null;
   const limited = group !== null && count > 0 && !priced;
   const stale = Boolean(result?.stale);
   const kind = !group ? 'need-details' : priced ? (stale ? 'stale' : 'priced') : limited ? 'limited' : 'empty';
-  const heading = !group ? 'اول وضعیت صفر یا کارکرده را مشخص کنید' : priced ? (stale ? 'قیمت ذخیره‌شده؛ نیازمند بررسی مجدد' : 'برآورد بازار آماده است') : limited ? 'شواهد بازار محدود است' : 'قیمت قابل اتکا پیدا نشد';
+  const heading = !group ? 'کارکرد خودرو را مشخص کنید' : priced ? (stale ? 'بازه حدودی ذخیره‌شده' : 'بازه حدودی قیمت بازار') : observed ? 'قیمت آگهی‌های مشابه' : limited ? 'اطلاعات قیمت محدود است' : 'قیمت قابل استناد پیدا نشد';
   const next = !group ? 'کارکرد را وارد کنید یا عبارت «صفر کیلومتر» را بنویسید.'
     : priced && !stale ? 'پیش از معامله، مشخصات آگهی‌ها را با خودروی واقعی تطبیق دهید.'
     : stale ? 'برای قیمت جدید از دکمه «استعلام مجدد» استفاده کنید.'
-    : limited ? 'نمونه کافی برای اعلام قیمت بازار وجود ندارد؛ شواهد را جداگانه بررسی کنید.'
+    : observed ? 'این مبلغ فقط قیمت پیشنهادی فروشندگان است، نه قیمت قطعی معامله.' 
+    : limited ? 'آگهی کافی برای نمایش قیمت حدودی پیدا نشد؛ منابع را بررسی کنید.'
     : 'مدل، سال، تیپ و وضعیت خودرو را بررسی یا استعلام را تازه‌سازی کنید.';
   const title = [v.brand,v.model,v.trim,v.year].filter(x=>x!==null&&x!==undefined&&x!=='').join(' · ');
-  const acceptedUrls = new Set(stats.used_source_urls || []);
   // In a limited report, show all accepted listing/market-price URLs instead of invented estimates.
   const evidence = group ? (result?.sources || []).filter(s => s && s.accepted &&
     (acceptedUrls.has(s.url) || !priced) && (s.kind === 'listing' || s.kind === 'market_price') &&
     typeof s.url === 'string' && /^https:\/\//.test(s.url)) : [];
   const evidenceLinks = evidence.slice(0,2).map(s=>({title:s.category||s.domain||'منبع بازار',url:s.url}));
-  return {kind,group,title,heading,next,estimate:priced?estimate:null,
+  return {kind,group,title,heading,next,estimate:priced?estimate:null,observed,
     range:validRange?{min,max}:null,median:priced&&typeof stats.price_median==='number'?stats.price_median:null,
     listings,domains,count,score,quality:stats.confidence||'نامشخص',evidenceLinks,
     cached:Boolean(result?.cached),stale,checkedAt:result?.checked_at??null,

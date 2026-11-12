@@ -4,7 +4,8 @@ BASE='https://khodro45.com/'
 DOMAIN='khodro45.com'
 
 def search(vehicle,limit=20):
-    # Public pages primarily provide pricing/editorial, not a stable listings feed.
+    # Khodro45 public web is primarily pricing/valuation/editorial, not a stable public listing feed.
+    # We only emit rows with an explicit vehicle price and never treat /mag/ articles as listings.
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''
     rows=[]; seen=set()
     for path in ('price/','car-price/',''):

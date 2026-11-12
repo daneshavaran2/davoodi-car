@@ -1562,7 +1562,7 @@ def compare(body:CompareInput,_=Depends(authorized)):
     if len(rows)!=len(set(body.ids)) or any(r['cache_key'].startswith('domain:') for r in rows): raise HTTPException(404,'برخی گزارش‌ها پیدا نشدند')
     return {'items':[{'id':r['id'],'query':r['query'],'checked_at':r['created_at'],'new':json.loads(r['result_json']).get('new'),'used':json.loads(r['result_json']).get('used')} for r in rows]}
 
-FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(Path(__file__).resolve().parent.parent/'frontend'/'dist')))
+FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(Path(__file__).resolve().parent/'frontend'/'dist' if (Path(__file__).resolve().parent/'frontend'/'dist').is_dir() else Path(__file__).resolve().parent.parent/'frontend'/'dist')))
 if (FRONTEND_DIST/'assets').is_dir():
     app.mount('/assets', StaticFiles(directory=str(FRONTEND_DIST/'assets')), name='assets')
 @app.get('/{path:path}')

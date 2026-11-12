@@ -1488,7 +1488,10 @@ def research_market(vehicle):
     used_stats=_weighted_stats(used_items,vehicle.get('mileage'))
     # Make cards and source counters consistent with the statistical outlier filter.
     dropped_outliers=new_stats.get('outliers_removed',0)+used_stats.get('outliers_removed',0)
-    if dropped_outliers:
+    # With model-name-only queries, cars may span years, trims and mileage.
+    # A valid expensive trim is not a statistical "outlier" of a cheaper trim.
+    broad_query = vehicle.get('year') is None or (vehicle.get('model')=='فیدلیتی' and not vehicle.get('trim'))
+    if dropped_outliers and not broad_query:
         retained=set(new_stats.get('used_source_urls',[])+used_stats.get('used_source_urls',[]))
         for item in accepted:
             if item['url'] not in retained:
@@ -1523,6 +1526,12 @@ def research_market(vehicle):
                 warnings.append('آگهی‌های اولیه دریافت شد، اما همگی در بررسی مشخصات/قیمت رد شدند؛ جزئیات ردشدن را در گزارش منابع ببینید.')
             else:
                 warnings.append('هیچ شاهد قیمت‌دار دریافت نشد. وضعیت هر سایت و خطاهای دسترسی را بررسی کنید؛ این وضعیت به معنی نبود خودرو در بازار نیست.')
+    if broad_query:
+        # Never publish a combined market mean across incompatible variants.
+        for stats in (new_stats,used_stats):
+            stats.update(price_average=None,price_median=None,suggested_min=None,suggested_max=None,
+                         confidence='گروه‌بندی',confidence_score=0)
+        diagnostics['outliers_removed']=0
     summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
     verified=set((new_stats.get('used_source_urls') or [])+(used_stats.get('used_source_urls') or []))
     # Do not expose obvious editorial/irrelevant pages as "source cards" in the UI.

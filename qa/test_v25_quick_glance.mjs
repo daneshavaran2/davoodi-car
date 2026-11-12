@@ -28,6 +28,24 @@ assert.deepEqual(single.observed,{min:2_400_000_000,max:2_400_000_000,count:1});
 const untrusted=makeQuickDecision({...good,used:{sample_count:1,listing_count:1,price_average:null,used_source_urls:[sparseUrls[0]]},
   sources:[{url:sparseUrls[0],kind:'listing',accepted:false,price:9_000_000_000}]});
 assert.equal(untrusted.observed,null);
+// A user who only says "فیدلیتی" gets separately identified asking-price
+// groups, never one fabricated aggregate over different years and trims.
+const nameOnly=makeQuickDecision({...good,
+  vehicle:{brand:'بهمن موتور',model:'فیدلیتی',year:null,mileage:null,trim:null},
+  price_groups:[
+    {year:1403,trim:'پرایم',condition:'کارکرده',mileage_group:'تا ۵۰ هزار',
+     price_min:2_400_000_000,price_max:2_600_000_000,count:3,source_urls:[TEST_URL]},
+    {year:1402,trim:'پرستیژ',condition:'کارکرده',mileage_group:'۱۰۰ تا ۲۰۰ هزار',
+     price_min:3_000_000_000,price_max:3_300_000_000,count:2,source_urls:[TEST_URL]}
+  ]});
+assert.equal(nameOnly.estimate,null);
+assert.equal(nameOnly.priceGroups.length,2);
+assert.notEqual(nameOnly.priceGroups[0].trim,nameOnly.priceGroups[1].trim);
+const missingTrim=makeQuickDecision({...good,vehicle:{...v,trim:null},price_groups:nameOnly.priceGroups});
+assert.equal(missingTrim.estimate,null);
+assert.equal(missingTrim.priceGroups.length,1);
+const fullDetails=makeQuickDecision({...good,price_groups:nameOnly.priceGroups});
+assert.equal(fullDetails.kind,'priced'); // exact query still uses adequate evidence
 // Unknown model cannot be assigned a quote from a past/corrupt cached result.
 const missingModel=makeQuickDecision({...good,vehicle:{...v,model:null}});
 assert.equal(missingModel.estimate,null);

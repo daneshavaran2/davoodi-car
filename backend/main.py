@@ -725,7 +725,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'27.0.0-market-reliability'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'28.0.0-name-only'}
 
 @app.get('/api/browser-check')
 def browser_check(_=Depends(authorized)):
@@ -758,7 +758,7 @@ def readiness():
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
             'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'27.0.0-market-reliability'}
+            'version':'28.0.0-name-only'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1531,8 +1531,31 @@ def research_market(vehicle):
               'price':x['price'],'mileage':x['mileage'],'year':x['year'],'relevance':x['relevance'],
               'accepted':x['accepted'],'rejection_reason':x['rejection_reason'],
               'quality_score':x.get('quality_score',0),'evidence_tier':x.get('evidence_tier'),
-              'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim')} for x in displayable]
-    return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
+              'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim'),
+              'is_new':x.get('is_new')} for x in displayable]
+    # A name-only search MUST NOT create a single misleading range across
+    # unrelated model years, Fidelity trims, or new and used cars.
+    # The simple UI shows up to six observed groups, backed by real ad URLs.
+    from collections import defaultdict
+    grouped=defaultdict(list)
+    for x in accepted:
+        if x.get('kind')!='listing' or not isinstance(x.get('price'),int):
+            continue
+        if x.get('is_new') is None:continue
+        year=x.get('year')
+        trim=(x.get('trim') or '').strip()
+        label=('صفر' if x['is_new'] else 'کارکرده')
+        grouped[(year,trim,label)].append(x)
+    price_groups=[]
+    for (year,trim,label),ads in grouped.items():
+        prices=sorted(int(a['price']) for a in ads)
+        price_groups.append({'year':year,'trim':trim or None,'condition':label,
+            'price_min':prices[0],'price_max':prices[-1],'count':len(ads),
+            'source_urls':[a['url'] for a in ads[:3]]})
+    price_groups.sort(key=lambda a:(-a['count'], -(a['year'] or 0),a['trim'] or ''))
+    price_groups=price_groups[:6]
+    return {'summary':summary,'new':new_stats,'used':used_stats,'price_groups':price_groups,
+            'currency':'تومان','sources':sources,'image_url':None,
             'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
             'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v25-glance-ai-ux','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
 
@@ -1560,8 +1583,8 @@ def resolve_search_vehicle(body: Search):
     if mileage is None and spoken.get('is_new'):
         mileage = 0
     trim = (body.trim or '').strip() or spoken.get('trim') or None
-    if model == 'فیدلیتی' and not trim:
-        raise HTTPException(422,'تیپ فیدلیتی مشخص نیست. لطفاً پرایم، پرستیژ یا الیت را انتخاب یا در عبارت جست‌وجو وارد کنید.')
+    # Name-only search: do not block on trim/year/mileage. Downstream
+    # grouping keeps different trims and years in separate ranges.
     condition = (body.condition or '').strip() or spoken.get('condition') or None
     transmission = (body.transmission or '').strip() or spoken.get('transmission') or None
     color = (body.color or '').strip() or spoken.get('color') or None

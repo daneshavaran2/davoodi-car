@@ -10,13 +10,16 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
   const quote=decision.estimate!==null;
   const hasObserved=!quote && decision.observed!==null;
   const hasPrice=quote||hasObserved||(broad&&overview?.groups?.length>0);
-  const statuses=(result?.site_status||[]).slice(0,6);
+  const statuses=(result?.site_status||[]).slice(0,8);
+  const timestampFa=value=>typeof value==='number'&&Number.isFinite(value)?new Date(value*1000).toLocaleString('fa-IR'):'ثبت نشده';
+  const attemptedCount=statuses.filter(s=>typeof s.checked_at==='number').length;
+  const verifiedCount=statuses.filter(s=>Number(s.accepted_count||0)>0).length;
   const raw=Number(result?.diagnostics?.found||0);
   const accepted=Number(result?.diagnostics?.accepted||0);
   const sourceLabel={evidence:'شاهد معتبر',no_valid_evidence:'دریافت شد؛ رد شد',
     no_results:'نتیجه مرتبط دریافت نشد',connector:'کانکتور پاسخ داد',
     connector_error:'خطای اتصال/استخراج',rate_limited:'محدودیت دسترسی',
-    error:'خطای منبع',not_configured:'جست‌وجوی پشتیبان فعال نیست',
+    error:'خطای منبع',not_configured:'نیازمند کانکتور یا API مجاز',
     not_checked:'بررسی نشد',searched:'نتیجه جست‌وجو'};
   const date=typeof decision.checkedAt==='number' ? new Date(decision.checkedAt*1000).toLocaleString('fa-IR') : null;
   return <section className={'quick-verdict '+decision.kind} aria-label="نتیجه در یک نگاه" aria-live="polite">
@@ -39,8 +42,10 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
       <span><b>{(broad?overview?.listing_count||0:decision.listings).toLocaleString('fa-IR')}</b> آگهی مرتبط</span>
       <span><b>{(broad?overview?.source_count||0:decision.domains).toLocaleString('fa-IR')}</b> سایت</span>
     </div>
-    {!hasPrice&&<details className="market-source-diagnostics" data-testid="market-source-status">
-      <summary>چرا قیمت پیدا نشد؟ · وضعیت منابع</summary>
+    <details className="market-source-diagnostics" data-testid="market-source-status">
+      <summary>{hasPrice?'منابع قیمت و زمان آخرین بررسی':'چرا قیمت پیدا نشد؟ · وضعیت منابع'}
+        {' · '+attemptedCount.toLocaleString('fa-IR')+' تلاش · '+verifiedCount.toLocaleString('fa-IR')+' منبع قیمت‌دار'}
+      </summary>
       <div role="status">
       <strong>{raw>0 ? `${raw.toLocaleString('fa-IR')} نتیجه اولیه؛ ${accepted.toLocaleString('fa-IR')} شاهد قابل استفاده` :
         'اطلاعات قابل استفاده از منابع دریافت نشد'}</strong>
@@ -49,11 +54,15 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
           title={[st.detail, ...(st.top_rejection_reasons||[]).map(r=>r.reason+': '+r.count)].filter(Boolean).join(' | ')}>
           {st.name} · {sourceLabel[st.status]||st.status}
           {st.raw_count>0&&` (${Number(st.raw_count).toLocaleString('fa-IR')} خام)`}
+          <span className="source-stamp">{st.checked_at?' · بررسی: '+timestampFa(st.checked_at)
+            :st.last_attempt_at?' · آخرین تلاش قبلی: '+timestampFa(st.last_attempt_at):' · بررسی نشده'}
+          </span>
+          {st.last_verified_price_at&&<span className="source-stamp">{' · آخرین قیمت معتبر: '+timestampFa(st.last_verified_price_at)}</span>}
         </span>)}</div>
       <small>{raw>0?'برای جزئیات حذف نتایج، «گزارش کامل» را باز کنید.':'محدودیت دسترسی سایت، تنظیم‌نبودن جست‌وجوی پشتیبان یا ناتمام‌ماندن استخراج را در گزارش کامل بررسی کنید.'}</small>
       {onCheckBrowser&&<button type="button" className="secondary-btn" onClick={onCheckBrowser}>بررسی مرورگر سرور</button>}
       </div>
-    </details>}
+    </details>
     <p className="quick-next"><b>قدم بعدی:</b> {decision.next}</p>
     {decision.evidenceLinks.length>0&&<div className="quick-source-links" aria-label="نمونه منابع معتبر">{decision.evidenceLinks.map(s=><a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer">{s.title}<ArrowUpLeft size={14}/></a>)}</div>}
     <div className="quick-bottom">

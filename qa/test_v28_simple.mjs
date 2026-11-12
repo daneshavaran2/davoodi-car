@@ -10,7 +10,8 @@ assert.ok(main.includes('فقط نام خودرو؛ مثلاً فیدلیتی'),
 assert.ok(card.includes('<ModelOverview overview={overview}/>'), 'Grouped prices should be the main answer');
 assert.ok(groups.includes('price_min===g.price_max'), 'A single observed price must not become an invented wide range');
 assert.ok(groups.includes('آگهی'), 'Each group must show its observed advertisement count');
-assert.ok(groups.includes('آگهی {j+1}'), 'Each group must show evidence links');
+assert.ok(groups.includes('a.source||a.domain'), 'Each group must show the real source name');
+assert.ok(groups.includes('a.url'), 'Each group must show verified evidence links');
 assert.ok(!groups.includes('Math.random'), 'Never manufacture estimate values');
 const broad={vehicle:{brand:'بهمن موتور',model:'فیدلیتی',year:null,mileage:null},
  model_overview:{mode:'name_only',groups:[{label:'۱۴۰۳ · پرایم · کارکرده',price_min:2_400_000_000,price_max:2_600_000_000}]}};

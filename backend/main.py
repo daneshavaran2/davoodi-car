@@ -8,7 +8,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from connectors import run as run_builtin_connector
-from market_intelligence import assess_and_dedupe, price_summary
+from market_intelligence import assess_and_dedupe, price_summary, compatible_year
+from source_health import record_source_results, read_source_results
 from model_overview import name_only_search, model_overview
 from vehicle_nlp import identify_vehicle, generation_from_text, variant_from_text
 from safety_v24 import explicit_vehicle_price, mileage_from_description, new_status, body_group, trim_status
@@ -726,7 +727,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'28.0.0-name-only-market'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'29.0.0-source-verified-simple-market'}
 
 @app.get('/api/browser-check')
 def browser_check(_=Depends(authorized)):
@@ -744,6 +745,12 @@ def browser_check(_=Depends(authorized)):
     finally:
         session.close()
 
+@app.get('/api/source-health')
+def source_health(_=Depends(authorized)):
+    """Historical source status, protected by the existing login."""
+    return {'items':read_source_results(db),'timestamp_unit':'unix_utc_seconds'}
+
+
 @app.get('/api/readiness')
 def readiness():
     try:
@@ -759,7 +766,7 @@ def readiness():
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
             'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
-            'version':'28.0.0-name-only-market'}
+            'version':'29.0.0-source-verified-simple-market'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1192,8 +1199,20 @@ def _normalize_result(source,row,vehicle):
     year=_structured_number(row.get('year'),kind='year')
     if year is None: year=_year_from_text(title+' '+content)
     score,year_ok=_relevance(vehicle,title,content)
+    # A provider may label a card with one year but send a different structured
+    # year. In a name-only search there is no requested year to catch this;
+    # reject conflicting evidence instead of grouping it under the wrong model.
+    title_year=_year_from_text(title)
+    conflicting_year=year is not None and title_year is not None and compatible_year(year,title_year) is False
+    title_trim=variant_from_text(title,vehicle.get('model'))
+    raw_trim=str(row.get('trim') or '').strip()
+    trim_aliases={'prime':'پرایم','prestige':'پرستیژ','elite':'الیت'}
+    normalized_row_trim=trim_aliases.get(raw_trim.casefold(),raw_trim)
+    conflicting_trim=bool(raw_trim and title_trim and _norm_text(normalized_row_trim)!=_norm_text(title_trim))
     rejection=None
-    if row.get('price_conflict'):rejection='قیمت کارت آگهی و صفحه جزئیات ناسازگار است'
+    if conflicting_year:rejection='سال عنوان آگهی و اطلاعات منبع ناسازگار است'
+    elif conflicting_trim:rejection='تیپ عنوان آگهی و اطلاعات منبع ناسازگار است'
+    elif row.get('price_conflict'):rejection='قیمت کارت آگهی و صفحه جزئیات ناسازگار است'
     elif row.get('detail_mismatch'):rejection='مشخصات صفحه جزئیات با کارت آگهی متفاوت است'
     elif kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
     elif score<45: rejection='مدل/تیپ با خودروی درخواستی تطابق کافی ندارد'
@@ -1206,7 +1225,7 @@ def _normalize_result(source,row,vehicle):
     return {'source':source['name'],'domain':host or source['domain'],'url':url,'title':title,'content':content,
             'kind':kind,'price':int(price) if price else None,'mileage':mileage,'year':year,
             'relevance':score,'is_new':is_new,'accepted':rejection is None,'rejection_reason':rejection,
-            'trim':row.get('trim') or variant_from_text(title+' '+content, vehicle.get('model')),'city':row.get('city'),
+            'trim':(title_trim or normalized_row_trim or variant_from_text(title+' '+content, vehicle.get('model'))),'city':row.get('city'),
             'condition':row.get('condition') or row.get('body_condition'),'color':row.get('color'),'published_at':row.get('published_at') or row.get('posted_at'), 'detail_error':row.get('detail_error'),
             'price_conflict':bool(row.get('price_conflict')), 'detail_mismatch':bool(row.get('detail_mismatch'))}
 
@@ -1371,7 +1390,8 @@ def research_market(vehicle):
             progress_report('بررسی مستقیم منابع',len(statuses)+1,len(SOURCE_CONNECTORS),source['name'])
             if error:
                 statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector_error',
-                                 'count':0,'raw_count':0,'accepted_count':0,'mode':mode,'detail':error})
+                                 'count':0,'raw_count':0,'accepted_count':0,'mode':mode,
+                                 'attempted':True,'detail':error})
                 fallback_sources.append(source)
                 continue
             if rows is None:
@@ -1387,7 +1407,7 @@ def research_market(vehicle):
             statuses.append({'name':source['name'],'domain':source['domain'],
                              'status':'connector' if accepted_count else ('no_valid_evidence' if raw_count else 'no_results'),
                              'count':added,'raw_count':raw_count,'accepted_count':accepted_count,
-                             'mode':mode})
+                             'attempted':True,'mode':mode})
             if accepted_count==0:fallback_sources.append(source)
 
     # 2) At most one focused fallback query per site, with a bounded worker
@@ -1424,27 +1444,28 @@ def research_market(vehicle):
                         if item['accepted']:accepted_now+=1
                     statuses.append({'name':source['name'],'domain':source['domain'],
                                      'status':'searched' if added else 'no_results','count':added,'raw_count':raw_count,
-                                     'accepted_count':accepted_now,'mode':'focused_search_fallback'})
+                                     'accepted_count':accepted_now,'attempted':True,'mode':'focused_search_fallback'})
                 except RuntimeError as exc:
                     msg=str(exc);fallback_errors.append(source['name']+': '+msg)
                     statuses.append({'name':source['name'],'domain':source['domain'],
                                      'status':'rate_limited' if '429' in msg or 'محدود' in msg else 'error',
                                      'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
-                                     'detail':msg[:120]})
+                                     'detail':msg[:120],'attempted':True})
                 except Exception:
                     logging.exception('Source fallback failure: %s',source['domain'])
                     fallback_errors.append(source['name']+': خطای اتصال')
                     statuses.append({'name':source['name'],'domain':source['domain'],'status':'error',
                                      'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
-                                     'detail':'خطای غیرمنتظره اتصال'})
+                                     'detail':'خطای غیرمنتظره اتصال','attempted':True})
     else:
         for source in candidates:
             statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_configured',
                              'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
+                             'attempted':False,
                              'detail':'جست‌وجوی تکمیلی غیرفعال: AVALAI_API_KEY تنظیم نشده است'})
     for source in dedup[MAX_DOMAIN_REQUESTS:]:
         statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_checked',
-                         'count':0,'raw_count':0,'accepted_count':0,'mode':'fallback_budget'})
+                         'count':0,'raw_count':0,'accepted_count':0,'mode':'fallback_budget','attempted':False})
 
     # Merge connector + fallback attempts into one readable status row per source.
     merged_status={}
@@ -1455,7 +1476,8 @@ def research_market(vehicle):
           'not_configured':3,'not_checked':2}
     for st in statuses:
         d=merged_status.setdefault(st['domain'],{'name':st['name'],'domain':st['domain'],'status':st['status'],
-            'count':0,'raw_count':0,'accepted_count':0,'modes':[]})
+            'count':0,'raw_count':0,'accepted_count':0,'modes':[],'attempted':False})
+        d['attempted']=d['attempted'] or bool(st.get('attempted'))
         d['count']+=int(st.get('count') or 0); d['raw_count']+=int(st.get('raw_count') or 0)
         d['accepted_count']+=int(st.get('accepted_count') or 0)
         if st.get('mode') and st['mode'] not in d['modes']:d['modes'].append(st['mode'])
@@ -1511,6 +1533,19 @@ def research_market(vehicle):
         for st in statuses:
             st['accepted_count']=sum(x['accepted'] for x in normalized if x['domain']==st['domain'])
             if st['accepted_count']:st['status']='evidence'
+    # A source with no usable evidence is not counted as a successful source.
+    # Persist checked/error/last-verified timestamps separately; old successful
+    # price timestamps survive a later 429 or source outage.
+    audit_error=False
+    try:
+        statuses=record_source_results(db,statuses)
+    except (sqlite3.Error, OSError) as exc:
+        logging.warning('Source status persistence unavailable: %s',exc)
+        audit_error=True
+        timestamp=time.time()
+        statuses=[{**st,'checked_at':timestamp if st.get('attempted') else None,
+                   'last_attempt_at':timestamp if st.get('attempted') else None,
+                   'last_verified_price_at':None} for st in statuses]
     diagnostics={'found':len(normalized),'accepted':len(accepted),'rejected':len(normalized)-len(accepted),
                  'reasons':{},'used_samples':used_stats.get('sample_count',0),'new_samples':new_stats.get('sample_count',0),
                  'articles_removed':0,'low_relevance_removed':0,'no_price_removed':0,
@@ -1524,6 +1559,8 @@ def research_market(vehicle):
             if 'تکراری' in x['rejection_reason']:diagnostics['duplicates_removed']+=1
             if 'قدیمی' in x['rejection_reason']:diagnostics['stale_removed']+=1
     warnings=[]
+    if audit_error:
+        warnings.append('ثبت تاریخچه وضعیت منابع در پایگاه داده ناموفق بود؛ تاریخچه بررسی‌های قبلی در این پاسخ در دسترس نیست.')
     inaccessible=[s['name'] for s in statuses if s.get('status') in ('connector_error','rate_limited','error')]
     if inaccessible:warnings.append('دسترسی یا استخراج در منابع زیر ناموفق بود؛ این موضوع به معنای نبود آگهی نیست: '+ '، '.join(inaccessible[:4]))
     if not AVALAI_KEY:
@@ -1555,7 +1592,7 @@ def research_market(vehicle):
     return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
             'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
             'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},
-            'model_overview':overview, 'engine':'v28-name-only-market',
+            'model_overview':overview, 'engine':'v29-source-verified-simple-market',
             'pricing_method':'آگهی‌های واقعی گروه‌بندی‌شده بر اساس سال، تیپ و وضعیت خودرو' }
 
 def resolve_search_vehicle(body: Search):

@@ -33,6 +33,7 @@ jobs:
           python test_v26_playwright.py
           python test_v27_reliability.py
           python test_v28_name_only.py
+          python test_v29_sources.py
   playwright-browser:
     runs-on: ubuntu-latest
     steps:
@@ -45,7 +46,7 @@ jobs:
       - name: Browser-rendered JS fixture test in real Chromium
         env:
           BROWSER_TEST_REQUIRED: '1'
-        run: cd backend && python test_v26_playwright.py && python test_v27_reliability.py && python test_v28_name_only.py
+        run: cd backend && python test_v26_playwright.py && python test_v27_reliability.py && python test_v28_name_only.py && python test_v29_sources.py
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -66,4 +67,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify deployable frontend and Chromium image
-        run: docker build -t davoodi-car:v28 .
+        run: docker build -t davoodi-car:v29 .

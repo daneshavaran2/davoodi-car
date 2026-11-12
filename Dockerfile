@@ -18,12 +18,14 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 COPY backend/main.py ./main.py
 COPY backend/market_intelligence.py ./market_intelligence.py
 COPY backend/model_overview.py ./model_overview.py
+COPY backend/source_health.py ./source_health.py
 COPY backend/vehicle_nlp.py ./vehicle_nlp.py
 COPY backend/safety_v24.py ./safety_v24.py
 COPY backend/connectors ./connectors
 COPY backend/test_v26_playwright.py ./test_v26_playwright.py
 COPY backend/test_v27_reliability.py ./test_v27_reliability.py
 COPY backend/test_v28_name_only.py ./test_v28_name_only.py
+COPY backend/test_v29_sources.py ./test_v29_sources.py
 COPY --from=frontend /web/dist /app/frontend/dist
 RUN test -s /app/frontend/dist/index.html && test -d /app/frontend/dist/assets \
     && mkdir -p /app/data && chown -R pwuser:pwuser /app/data \
@@ -33,7 +35,9 @@ RUN test -s /app/frontend/dist/index.html && test -d /app/frontend/dist/assets \
     && ADMIN_PASSWORD=build-only-v27-test-password SESSION_SECRET=build-only-v27-session-secret-must-be-32-characters DB_PATH=/tmp/davoodi-build-test.sqlite3 \
          python test_v27_reliability.py \
     && ADMIN_PASSWORD=build-only-v28-test-password SESSION_SECRET=build-only-v28-session-secret-must-be-32-characters DB_PATH=/tmp/davoodi-build-test.sqlite3 \
-         python test_v28_name_only.py
+         python test_v28_name_only.py \
+    && ADMIN_PASSWORD=build-only-v29-test-password SESSION_SECRET=build-only-v29-session-secret-must-be-32-characters DB_PATH=/tmp/davoodi-build-test.sqlite3 \
+         python test_v29_sources.py
 # Non-root account is recommended for public-page scraping. No CAPTCHA bypass.
 USER pwuser
 # Assert that Chromium launches with the same non-root account used in Liara.

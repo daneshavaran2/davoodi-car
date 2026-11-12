@@ -541,3 +541,9 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 .simple-price-links{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
 .simple-price-links a{display:inline-flex;align-items:center;gap:5px;font-size:.83rem;text-decoration:underline}
 .simple-price-note{display:block;margin-top:14px;opacity:.84;font-size:.79rem}
+
+/* v29: source attempts are optional details, not distracting dashboard cards. */
+.market-source-diagnostics>summary{cursor:pointer;font-size:.88rem;font-weight:650;line-height:1.8}
+.market-source-diagnostics>div{margin-top:10px}
+.market-source-diagnostics .source-stamp{display:inline;border:0;background:none;padding:0 3px;font-size:.72rem;opacity:.88;white-space:normal}
+.market-source-pills>span{display:block;flex:1 1 240px;line-height:1.7}

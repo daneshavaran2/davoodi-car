@@ -89,7 +89,12 @@ def score_evidence(item, vehicle, *, now=None, max_age_days=60):
         return 0, 'قیمت قابل استناد در صفحه وجود ندارد'
     if not canonical_url(item.get('url')):
         return 0, 'لینک معتبر نیست'
-    if item.get('is_new') is None and item.get('mileage') is None:
+    listed_mileage=item.get('mileage')
+    if item.get('is_new') is True and isinstance(listed_mileage,int) and listed_mileage>0:
+        return 0, 'وضعیت صفر کیلومتر و کارکرد آگهی متناقض است'
+    if item.get('is_new') is False and listed_mileage == 0:
+        return 0, 'وضعیت کارکرده و کارکرد صفر آگهی متناقض است'
+    if item.get('is_new') is None and listed_mileage is None:
         return 0, 'صفر یا کارکرده بودن خودرو در منبع مشخص نیست'
     model_cov = _token_coverage(vehicle.get('model'), text)
     brand_cov = _token_coverage(vehicle.get('brand'), text)

@@ -3,8 +3,8 @@
 The public URL structure can change; on a blocked page this connector raises an
 honest source error. Official/licensed connector URLs still take precedence.
 """
-import os
-from urllib.parse import quote
+import os,re
+from urllib.parse import quote, urlsplit
 from .common import fetch_html, matches_model, same_host
 from .extract import listing_cards_from_html, detail_fields
 
@@ -14,7 +14,11 @@ CITIES={'تهران':'tehran','مشهد':'mashhad','اصفهان':'isfahan',
 
 
 def _is_detail(url):
-    return same_host(url,DOMAIN) and '/v/' in url.lower() and url.lower().count('/')>=5
+    if not same_host(url,DOMAIN):return False
+    # Divar supports both /v/<id> short links and /v/<slug>/<id> listings.
+    # Count URL path segments rather than counting the slashes in https://.
+    path=urlsplit(url).path.lower()
+    return bool(re.fullmatch(r'/v/(?:[^/]+/)?[a-z0-9_-]{4,}/?',path,re.I))
 
 
 def search(vehicle,limit=25):

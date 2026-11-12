@@ -99,6 +99,17 @@ class SourceAndPriceV29Tests(unittest.TestCase):
         self.assertEqual({x['condition'] for x in overview['groups']},
                          {'وضعیت نامشخص','کارکرده'})
 
+    def test_contradictory_zero_used_metadata_is_never_priced(self):
+        from market_intelligence import score_evidence
+        item={'accepted':True,'url':'https://bama.ir/car/detail-999',
+              'domain':'bama.ir','price':2600000000,'kind':'listing',
+              'title':'فیدلیتی پرایم ۱۴۰۳','year':1403,'trim':'پرایم',
+              'is_new':False,'mileage':0}
+        score,reason=score_evidence(item,{'model':'فیدلیتی'})
+        self.assertEqual(score,0)
+        self.assertIn('متناقض',reason)
+        self.assertEqual(model_overview({'model':'فیدلیتی'},[item])['groups'],[])
+
     def test_links_include_real_source_name_and_are_unique(self):
         rows=[{'accepted':True,'url':url,'source':source,'domain':domain,
               'price':price,'kind':'listing','year':1403,'trim':'پرایم',

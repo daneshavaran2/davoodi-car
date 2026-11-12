@@ -2,7 +2,7 @@ import React from 'react';
 import {ArrowUpLeft,Clock3,Info,RotateCcw,ShieldCheck} from 'lucide-react';
 import {makeQuickDecision,moneyFa} from './quickDecision.mjs';
 
-export default function QuickVerdict({result,onRefresh,onEdit}){
+export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
   const decision=makeQuickDecision(result);
   const quote=decision.estimate!==null;
   const statuses=(result?.site_status||[]).slice(0,6);
@@ -41,6 +41,9 @@ export default function QuickVerdict({result,onRefresh,onEdit}){
       <small>{raw>0?'برای جزئیات حذف نتایج، «گزارش کامل» را باز کنید.':'محدودیت دسترسی سایت، تنظیم‌نبودن جست‌وجوی پشتیبان یا ناتمام‌ماندن استخراج را در گزارش کامل بررسی کنید.'}</small>
     </div>}
     <p className="quick-next"><b>قدم بعدی:</b> {decision.next}</p>
+    {!quote&&onCheckBrowser&&<button type="button" className="secondary-btn" onClick={onCheckBrowser}>
+      بررسی اجرای Playwright در سرور
+    </button>}
     {decision.evidenceLinks.length>0&&<div className="quick-source-links" aria-label="نمونه منابع معتبر">{decision.evidenceLinks.map(s=><a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer">{s.title}<ArrowUpLeft size={14}/></a>)}</div>}
     <div className="quick-bottom">
       <span><Clock3 size={14}/> {date ? 'آخرین بررسی: '+date : 'زمان بررسی نامشخص'} {decision.cached?'· از حافظه':''}</span>

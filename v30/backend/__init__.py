@@ -1,0 +1,1 @@
+"""DavoodiCar offline-first application."""

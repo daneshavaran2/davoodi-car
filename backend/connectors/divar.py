@@ -35,6 +35,11 @@ def search(vehicle,limit=25):
         if len(result)<max_detail:
             try:
                 details=detail_fields(fetch_html(card['url'],timeout=6),card['title'])
+                if details.get('title') and not matches_model(vehicle.get('brand'),model,details['title']):
+                    card['detail_mismatch']=True
+                    raise ValueError('عنوان صفحه جزئیات با مدل خواسته‌شده تفاوت دارد')
+                if card.get('price') and details.get('price') and abs(card['price']-details['price'])>max(50_000_000,card['price']*.05):
+                    card['price_conflict']=True
                 for key in ('price','year','mileage','published_at'):
                     if details.get(key) is not None and (card.get(key) is None or key=='published_at'):
                         card[key]=details[key]

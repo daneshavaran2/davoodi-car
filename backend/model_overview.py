@@ -26,8 +26,14 @@ def model_overview(vehicle, accepted, max_groups=8):
         if not isinstance(year,int) or isinstance(year,bool):
             year=None
         trim=' '.join(str(item.get('trim') or 'نامشخص').strip().split())[:80]
-        # Zero versus used is kept separate even when the user gave no mileage.
-        kind='صفر' if item.get('is_new') is True else 'کارکرده'
+        # Missing new/used evidence must never silently become "used".
+        km=item.get('mileage')
+        if item.get('is_new') is True:
+            kind='صفر'
+        elif item.get('is_new') is False or (isinstance(km,int) and km>0):
+            kind='کارکرده'
+        else:
+            kind='وضعیت نامشخص'
         groups[(year,trim,kind)].append(item)
 
     result=[]
@@ -40,7 +46,23 @@ def model_overview(vehicle, accepted, max_groups=8):
             upper=prices[(3*(len(prices)-1)+3)//4]
         else:
             lower,upper=prices[0],prices[-1]
-        links=list(dict.fromkeys(x['url'] for x in items if x.get('url','').startswith('https://')))[:3]
+        # Prefer one real link per independent source before repeating a site.
+        linked=[];domains=set();urlset=set()
+        ordered=sorted(items,key=lambda x: (str(x.get('domain') or ''),str(x.get('url') or '')))
+        for pass_num in (0,1):
+            for x in ordered:
+                url=x.get('url') or ''
+                domain=x.get('domain') or ''
+                if not isinstance(url,str) or not url.startswith('https://') or url in urlset:
+                    continue
+                if pass_num==0 and domain in domains:continue
+                if pass_num==1 and domain not in domains:continue
+                linked.append({'url':url,'source':x.get('source') or domain,
+                               'domain':domain,'price':int(x['price'])})
+                urlset.add(url);domains.add(domain)
+                if len(linked)>=4:break
+            if len(linked)>=4:break
+        links=[a['url'] for a in linked]
         result.append({
             'year':year,'trim':trim,'condition':kind,
             'label':f"{year if year else 'سال نامشخص'} · {trim} · {kind}",
@@ -48,7 +70,7 @@ def model_overview(vehicle, accepted, max_groups=8):
             'price_middle':round(median(prices)) if len(prices)>=3 else None,
             'listing_count':len(prices),
             'source_count':len({x.get('domain') for x in items if x.get('domain')}),
-            'links':links,
+            'links':links,'ads':linked,
             'limited':len(prices)<3,
         })
     result.sort(key=lambda x:(-x['listing_count'],-(x['year'] or 0),x['trim'],x['condition']))

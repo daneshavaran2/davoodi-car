@@ -1084,7 +1084,7 @@ def _kind_from_url_title(url,title):
     # Explicit individual-ad URL patterns supported by current public sites.
     if 'bama.ir' in url and '/car/detail-' in path: return 'listing'
     if 'hamrah-mechanic.com' in url and re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',path): return 'listing'
-    if 'divar.ir' in url and re.search(r'/v/[^/]+/[\w-]+$',path): return 'listing'
+    if 'divar.ir' in url and re.fullmatch(r'/v/(?:[^/]+/)?[\w-]{4,}/?',path): return 'listing'
     if 'sheypoor.com' in url and re.search(r'/(s/|listing/|v/)[^/]+',path): return 'listing'
     if re.search(r'/(used-cars/|listing/|ads/|vehicles/)',path): return 'listing'
     # Search/category pages are discovery only, never evidence.

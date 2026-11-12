@@ -28,6 +28,15 @@ assert.deepEqual(single.observed,{min:2_400_000_000,max:2_400_000_000,count:1});
 const untrusted=makeQuickDecision({...good,used:{sample_count:1,listing_count:1,price_average:null,used_source_urls:[sparseUrls[0]]},
   sources:[{url:sparseUrls[0],kind:'listing',accepted:false,price:9_000_000_000}]});
 assert.equal(untrusted.observed,null);
+// Model-only searches group real ads by year and trim, no mandatory mileage.
+const modelOnly=makeQuickDecision({...good,
+  vehicle:{brand:'بهمن موتور',model:'فیدلیتی',year:null,mileage:null},
+  model_overview:{mode:'name_only',groups:[{label:'۱۴۰۳ · پرایم · کارکرده',price_min:2_000_000_000,price_max:2_200_000_000}]}});
+assert.equal(modelOnly.kind,'limited');
+assert.equal(modelOnly.heading,'بازه قیمت آگهی‌های خودرو');
+const modelOnlyEmpty=makeQuickDecision({...good,vehicle:{brand:'بهمن موتور',model:'فیدلیتی',year:null,mileage:null},
+  model_overview:{mode:'name_only',groups:[]}});
+assert.equal(modelOnlyEmpty.kind,'empty');
 // Unknown model cannot be assigned a quote from a past/corrupt cached result.
 const missingModel=makeQuickDecision({...good,vehicle:{...v,model:null}});
 assert.equal(missingModel.estimate,null);

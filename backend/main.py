@@ -1545,11 +1545,19 @@ def research_market(vehicle):
         year=x.get('year')
         trim=(x.get('trim') or '').strip()
         label=('صفر' if x['is_new'] else 'کارکرده')
-        grouped[(year,trim,label)].append(x)
+        km=x.get('mileage')
+        if x['is_new']: km_group='صفر کیلومتر'
+        elif km is None:km_group='کارکرد نامشخص'
+        elif km<=50000:km_group='تا ۵۰ هزار'
+        elif km<=100000:km_group='۵۰ تا ۱۰۰ هزار'
+        elif km<=200000:km_group='۱۰۰ تا ۲۰۰ هزار'
+        else:km_group='بیش از ۲۰۰ هزار'
+        grouped[(year,trim,label,km_group)].append(x)
     price_groups=[]
-    for (year,trim,label),ads in grouped.items():
+    for (year,trim,label,km_group),ads in grouped.items():
         prices=sorted(int(a['price']) for a in ads)
         price_groups.append({'year':year,'trim':trim or None,'condition':label,
+            'mileage_group':km_group,
             'price_min':prices[0],'price_max':prices[-1],'count':len(ads),
             'source_urls':[a['url'] for a in ads[:3]]})
     price_groups.sort(key=lambda a:(-a['count'], -(a['year'] or 0),a['trim'] or ''))

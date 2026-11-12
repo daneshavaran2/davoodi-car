@@ -527,3 +527,17 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 .market-source-pills span.bad{border-color:rgba(255,105,105,.55);color:#ffc3c3}
 .market-source-pills span.good{border-color:rgba(100,210,140,.6);color:#aaf4c8}
 .market-source-diagnostics small{opacity:.83;font-size:.78rem}
+
+/* v28: simple market-first price cards for model-name queries. */
+.simple-price-groups{margin:10px 0 16px}
+.simple-price-intro{font-size:.93rem;opacity:.86;line-height:1.8;margin:0 0 12px}
+.simple-price-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:12px}
+.simple-price-item{border-radius:15px;border:1px solid rgba(170,185,208,.25);padding:16px;background:rgba(30,40,60,.16);min-width:0}
+.simple-price-item-head{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.simple-price-item-head strong{font-weight:700;font-size:.96rem}
+.simple-price-item-head small,.simple-price-limited{font-size:.8rem;opacity:.82}
+.simple-price-value{font-size:clamp(1.07rem,2.6vw,1.52rem);font-weight:800;margin:12px 0;line-height:1.9;overflow-wrap:anywhere;direction:rtl}
+.simple-price-limited{display:block;margin:5px 0}
+.simple-price-links{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px}
+.simple-price-links a{display:inline-flex;align-items:center;gap:5px;font-size:.83rem;text-decoration:underline}
+.simple-price-note{display:block;margin-top:14px;opacity:.84;font-size:.79rem}

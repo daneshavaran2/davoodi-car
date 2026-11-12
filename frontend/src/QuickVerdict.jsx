@@ -1,12 +1,15 @@
 import React from 'react';
 import {ArrowUpLeft,Clock3,Info,RotateCcw,ShieldCheck} from 'lucide-react';
 import {makeQuickDecision,moneyFa} from './quickDecision.mjs';
+import ModelOverview from './ModelOverview.jsx';
 
 export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
   const decision=makeQuickDecision(result);
+  const broad=result?.model_overview?.mode==='name_only';
+  const overview=result?.model_overview;
   const quote=decision.estimate!==null;
   const hasObserved=!quote && decision.observed!==null;
-  const hasPrice=quote||hasObserved;
+  const hasPrice=quote||hasObserved||(broad&&overview?.groups?.length>0);
   const statuses=(result?.site_status||[]).slice(0,6);
   const raw=Number(result?.diagnostics?.found||0);
   const accepted=Number(result?.diagnostics?.accepted||0);
@@ -23,7 +26,7 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
     </div>
     {decision.title&&<p className="quick-vehicle">{decision.title} · {decision.group==='new'?'صفر کیلومتر':decision.group==='used'?'کارکرده':'کارکرد نامشخص'}</p>}
     <h2 className="quick-decision-heading">{decision.heading}</h2>
-    {quote ? <div className="quick-main-figure"><span>حدود قیمت بازار (بر اساس آگهی‌ها)</span><strong data-testid="quick-quote">{moneyFa(decision.estimate)}</strong>
+    {broad ? <ModelOverview overview={overview}/> : quote ? <div className="quick-main-figure"><span>حدود قیمت بازار (بر اساس آگهی‌ها)</span><strong data-testid="quick-quote">{moneyFa(decision.estimate)}</strong>
       {decision.range&&<p>بازه معمول آگهی‌ها: <b>{moneyFa(decision.range.min)} تا {moneyFa(decision.range.max)}</b></p>}
     </div>:hasObserved?<div className="quick-main-figure">
       <span>{decision.observed.count===1?'قیمت پیشنهادی یک آگهی مشابه':'بازه قیمت پیشنهادی آگهی‌های مشابه'}</span>
@@ -33,8 +36,8 @@ export default function QuickVerdict({result,onRefresh,onEdit,onCheckBrowser}){
       <small>تعداد آگهی مستقیم: {decision.observed.count.toLocaleString('fa-IR')} · نمونه محدود؛ قیمت قطعی بازار نیست.</small>
     </div>:<div className="quick-no-quote"><Info size={23}/><strong>فعلاً قیمت قابل استناد از آگهی‌های مشابه دریافت نشد.</strong></div>}
     <div className="quick-facts">
-      <span><b>{decision.listings.toLocaleString('fa-IR')}</b> آگهی مرتبط</span>
-      <span><b>{decision.domains.toLocaleString('fa-IR')}</b> سایت</span>
+      <span><b>{(broad?overview?.listing_count||0:decision.listings).toLocaleString('fa-IR')}</b> آگهی مرتبط</span>
+      <span><b>{(broad?overview?.source_count||0:decision.domains).toLocaleString('fa-IR')}</b> سایت</span>
     </div>
     {!hasPrice&&<details className="market-source-diagnostics" data-testid="market-source-status">
       <summary>چرا قیمت پیدا نشد؟ · وضعیت منابع</summary>

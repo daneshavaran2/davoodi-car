@@ -8,6 +8,8 @@ export const moneyFa = value => {
 
 export function makeQuickDecision(result) {
   const v = result?.vehicle || {};
+  const broad=result?.model_overview?.mode==='name_only';
+  const broadGroups=Array.isArray(result?.model_overview?.groups)?result.model_overview.groups:[];
   const newCar = v.mileage === 0;
   const usedCar = typeof v.mileage === 'number' && v.mileage > 0;
   const group = newCar ? 'new' : usedCar ? 'used' : null;
@@ -37,9 +39,10 @@ export function makeQuickDecision(result) {
     : null;
   const limited = group !== null && count > 0 && !priced;
   const stale = Boolean(result?.stale);
-  const kind = !group ? 'need-details' : priced ? (stale ? 'stale' : 'priced') : limited ? 'limited' : 'empty';
-  const heading = !group ? 'کارکرد خودرو را مشخص کنید' : priced ? (stale ? 'بازه حدودی ذخیره‌شده' : 'بازه حدودی قیمت بازار') : observed ? 'قیمت آگهی‌های مشابه' : limited ? 'اطلاعات قیمت محدود است' : 'قیمت قابل استناد پیدا نشد';
-  const next = !group ? 'کارکرد را وارد کنید یا عبارت «صفر کیلومتر» را بنویسید.'
+  const kind = broad ? (broadGroups.length?'limited':'empty') : !group ? 'need-details' : priced ? (stale ? 'stale' : 'priced') : limited ? 'limited' : 'empty';
+  const heading = broad ? (broadGroups.length?'بازه قیمت آگهی‌های خودرو':'قیمت آگهی‌های این مدل پیدا نشد') : !group ? 'کارکرد خودرو را مشخص کنید' : priced ? (stale ? 'بازه حدودی ذخیره‌شده' : 'بازه حدودی قیمت بازار') : observed ? 'قیمت آگهی‌های مشابه' : limited ? 'اطلاعات قیمت محدود است' : 'قیمت قابل استناد پیدا نشد';
+  const next = broad ? (broadGroups.length?'برای مقایسه دقیق‌تر، سال یا تیپ را هم می‌توانید اضافه کنید.':'دسترسی به منابع یا وجود آگهی مرتبط را بررسی کنید؛ نبود نتیجه به معنی نبود خودرو در بازار نیست.')
+    : !group ? 'کارکرد را وارد کنید یا عبارت «صفر کیلومتر» را بنویسید.'
     : priced && !stale ? 'پیش از معامله، مشخصات آگهی‌ها را با خودروی واقعی تطبیق دهید.'
     : stale ? 'برای قیمت جدید از دکمه «استعلام مجدد» استفاده کنید.'
     : observed ? 'این مبلغ فقط قیمت پیشنهادی فروشندگان است، نه قیمت قطعی معامله.' 

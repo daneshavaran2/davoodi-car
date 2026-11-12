@@ -112,6 +112,21 @@ class ReleaseTests(unittest.TestCase):
         rows.append(self.listing(url='https://divar.ir/v/fidelity/abc3',domain='divar.ir',price=2_600_000_000))
         assess_and_dedupe(rows,self.vehicle())
         self.assertIsNotNone(price_summary(rows,50000)['price_average'])
+    def test_unverified_raw_result_must_not_show_valid_evidence_badge(self):
+        vehicle=self.vehicle()
+        raw={'url':'https://divar.ir/v/fidelity-v24','title':'فیدلیتی پرایم مدل ۱۴۰۳ کارکرد ۵۰ هزار بدون رنگ',
+             'kind':'listing','price':2500000000,'year':1403,'trim':'پرایم','mileage':50000,
+             'condition':'بدون رنگ','transmission':'اتوماتیک','published_at':None}
+        def direct(source,vehicle):
+            return [raw] if source['domain']=='divar.ir' else []
+        with patch.object(main,'_direct_connector',side_effect=direct):
+            with patch.object(main,'_builtin_connector',return_value=[]):
+                result=main.research_market(vehicle)
+        st=next(x for x in result['site_status'] if x['domain']=='divar.ir')
+        self.assertEqual(st['accepted_count'],0)
+        self.assertNotEqual(st['status'],'evidence')
+        self.assertEqual(result['diagnostics']['accepted'],0)
+
     def test_jsonld_time_and_currency(self):
         raw='<html><script type="application/ld+json">{"@type":"Offer","datePublished":"2026-11-09T12:00:00+03:30","price":"25000000000","priceCurrency":"IRR"}</script></html>'
         found=structured_listing_fields(raw)

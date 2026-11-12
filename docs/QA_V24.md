@@ -9,7 +9,7 @@
 | بک‌اند v21 | تست جست‌وجوی دامنه، حذف مقاله و شواهد محدود؛ موفق |
 | موتور v22 | ۱۱ تست unittest؛ موفق |
 | API و منابع v23 | ۲۱ تست unittest؛ موفق |
-| رگرسیون امنیت/قیمت v24 | ۲۹ تست unittest؛ موفق |
+| رگرسیون امنیت/قیمت v24 | ۳۰ تست unittest؛ موفق |
 | مرورگر fallback | ۶ سناریوی گفتار JavaScript و ۵ بررسی قراردادی UX؛ موفق |
 | Playwright Chromium | ۳ جمله واقعی به parser محلی، viewport 390/1440؛ موفق **بدون اجرای React** |
 | Static ASGI | صفحه اصلی، فایل asset و `/api/health` با dist ساختگی؛ موفق؛ **نه build Vite** |

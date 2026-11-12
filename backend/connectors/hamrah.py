@@ -1,6 +1,5 @@
 """Hamrah mechanic public listing connector, including hydrated JS cards."""
 import os,re
-from urllib.parse import urljoin
 from .common import fetch_html,token_score,matches_model,same_host,links_from_html
 from .extract import listing_cards_from_html, detail_fields
 
@@ -31,26 +30,26 @@ def search(vehicle,limit=25):
     rows=[];seen=set()
     max_detail=min(int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')),limit)
     for page_url,markup in pages:
-     cards=listing_cards_from_html(markup,page_url,_is_detail,limit=max(160,limit*5))
-     for card in cards:
-        if card['url'] in seen:continue
-        seen.add(card['url'])
-        if not matches_model(brand,model,card['title']+' '+card['content']):continue
-        if len(rows)<max_detail:
-            try:
-                more=detail_fields(fetch_html(card['url'],timeout=6),card['title'])
-                if more.get('title') and not matches_model(brand,model,more['title']):
-                    card['detail_mismatch']=True
-                    raise ValueError('عنوان صفحه جزئیات با مدل خواسته‌شده تفاوت دارد')
-                if card.get('price') and more.get('price') and abs(card['price']-more['price'])>max(50_000_000,card['price']*.05):
-                    card['price_conflict']=True
-                for key in ('price','year','mileage','published_at'):
-                    if more.get(key) is not None and (card.get(key) is None or key=='published_at'):
-                        card[key]=more[key]
-                if more.get('title') and matches_model(brand,model,more['title']):card['title']=more['title']
-                card['content']=(more.get('content') or card['content'])[:2200]
-            except (RuntimeError, LookupError, ValueError):
-                card['detail_error']='دریافت جزئیات این آگهی ممکن نشد'
-        if matches_model(brand,model,card['title']+' '+card['content']): rows.append(card)
-        if len(rows)>=limit:return rows
+        cards=listing_cards_from_html(markup,page_url,_is_detail,limit=max(160,limit*5))
+        for card in cards:
+            if card['url'] in seen:continue
+            seen.add(card['url'])
+            if not matches_model(brand,model,card['title']+' '+card['content']):continue
+            if len(rows)<max_detail:
+                try:
+                    more=detail_fields(fetch_html(card['url'],timeout=6),card['title'])
+                    if more.get('title') and not matches_model(brand,model,more['title']):
+                        card['detail_mismatch']=True
+                        raise ValueError('عنوان صفحه جزئیات با مدل خواسته‌شده تفاوت دارد')
+                    if card.get('price') and more.get('price') and abs(card['price']-more['price'])>max(50_000_000,card['price']*.05):
+                        card['price_conflict']=True
+                    for key in ('price','year','mileage','published_at'):
+                        if more.get(key) is not None and (card.get(key) is None or key=='published_at'):
+                            card[key]=more[key]
+                    if more.get('title') and matches_model(brand,model,more['title']):card['title']=more['title']
+                    card['content']=(more.get('content') or card['content'])[:2200]
+                except (RuntimeError, LookupError, ValueError):
+                    card['detail_error']='دریافت جزئیات این آگهی ممکن نشد'
+            if matches_model(brand,model,card['title']+' '+card['content']): rows.append(card)
+            if len(rows)>=limit:return rows
     return rows

@@ -29,7 +29,11 @@ def search(vehicle,limit=30):
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''
     if not (brand or model):return []
     home=fetch_html(BASE+'/car',timeout=8)
-    brand_url=_best_link(links_from_html(home,BASE),brand)
+    home_links=links_from_html(home,BASE)
+    # Some layouts expose a model category directly without the maker label.
+    brand_url=(_best_link(home_links,brand,model) if model else None) or _best_link(home_links,brand)
+    if not brand_url and model:
+        brand_url=_best_link(home_links,'',model)
     if not brand_url:
         # Some Bama layouts show results directly rather than navigation links.
         return _rows(home,BASE+'/car',brand,model,limit)

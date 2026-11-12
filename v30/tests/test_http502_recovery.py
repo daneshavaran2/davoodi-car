@@ -40,3 +40,8 @@ def test_worker_fails_closed_without_db(monkeypatch):
     monkeypatch.setenv('DB_WAIT_ATTEMPTS','1')
     monkeypatch.delenv('DATABASE_URL',raising=False)
     assert liara_entrypoint.main()==1
+
+def test_live_endpoint_works_without_database(monkeypatch):
+    monkeypatch.delenv('DATABASE_URL',raising=False)
+    r=client.get('/api/live')
+    assert r.status_code==200 and r.json()['status']=='alive'

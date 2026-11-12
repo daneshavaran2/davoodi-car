@@ -59,7 +59,7 @@ class SearchQualityTests(unittest.TestCase):
         main._last_search[0]=0
 
     def test_health_and_login_auth(self):
-        self.assertEqual(client.get('/api/health').json()['version'],'25.0.0-glance-ai-ux')
+        self.assertEqual(client.get('/api/health').json()['version'],'26.0.0-playwright-market')
         self.assertEqual(client.post('/api/login',json={'password':'wrong'}).status_code,401)
         self.assertEqual(client.post('/api/search',json={'query':'سانتافه ۲۰۲۵'}).status_code,401)
 

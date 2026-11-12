@@ -41,7 +41,30 @@ def links_from_html(raw,base):
 def text_from_html(raw):
     p=TextParser();p.feed(raw);return ' '.join(p.parts)
 
-def fetch_html(url,timeout=12,max_bytes=2_000_000):
+def fetch_html(url,timeout=12,max_bytes=3_000_000):
+    # Chromium is enabled by default for dynamic marketplace listing pages.
+    # `auto` first tries HTML and renders only when it is a JavaScript shell;
+    # an access denial is never bypassed through a second transport.
+    from .browser import browser_mode, rendered_html
+    mode = browser_mode()
+    if mode == 'playwright':
+        return rendered_html(url, timeout=timeout, max_bytes=max_bytes)
+    if mode == 'auto':
+        try:
+            raw = _fetch_http_html(url, timeout=timeout, max_bytes=max_bytes)
+        except RuntimeError as exc:
+            if any(key in str(exc) for key in ('401', '403', '429')):
+                raise
+            return rendered_html(url, timeout=timeout, max_bytes=max_bytes)
+        # Detect JavaScript shells lacking any ad anchor. Ordinary static
+        # documents stay on the fast HTTP path.
+        if len(raw) < 2500 and ('id="__next"' in raw or 'id="root"' in raw or 'enable javascript' in raw.lower()):
+            return rendered_html(url, timeout=timeout, max_bytes=max_bytes)
+        return raw
+    return _fetch_http_html(url, timeout=timeout, max_bytes=max_bytes)
+
+
+def _fetch_http_html(url,timeout=12,max_bytes=3_000_000):
     req=Request(url,headers={
         'User-Agent':'Mozilla/5.0 (compatible; DavoodiCarMarket/1.0; +https://davoodicar.liara.run)',
         'Accept':'text/html,application/xhtml+xml',
@@ -76,17 +99,18 @@ def token_score(brand,model,text):
     if not toks:return 0
     return sum(1 for z in set(toks) if z in t)/len(set(toks))
 
+def matches_model(brand,model,text,minimum=.6):
+    # Most public ads show the model but omit the manufacturer name.
+    # Only model tokens are mandatory; main's evidence scorer later checks
+    # year, trim, mileage, body and other requested fields.
+    if model:return token_score('',model,text)>=minimum
+    return token_score(brand,'',text)>=.3
+
 def explicit_price(text):
-    t=norm(text).replace(',','').replace('٬','')
-    vals=[]
-    for m in re.finditer(r'(?<!\d)(\d+(?:\.\d+)?)\s*میلیارد(?:\s*(?:و|،)?\s*(\d+(?:\.\d+)?)\s*میلیون)?\s*تومان?',t):
-        v=float(m.group(1))*1_000_000_000
-        if m.group(2):v+=float(m.group(2))*1_000_000
-        vals.append(int(v))
-    for m in re.finditer(r'(?<!\d)(\d{7,13})\s*تومان',t):
-        vals.append(int(m.group(1)))
-    vals=[x for x in vals if 50_000_000<=x<=100_000_000_000]
-    return vals[0] if vals else None
+    # Do not take the first number on a page: it may be a seller fee, loan,
+    # unrelated sidebar ad, or installment. Ambiguous prices abstain.
+    from safety_v24 import explicit_vehicle_price
+    return explicit_vehicle_price(text)
 
 def year_value(text):
     t=norm(text)
@@ -96,14 +120,8 @@ def year_value(text):
     return None
 
 def mileage_value(text):
-    t=norm(text).replace(',','').replace('٬','')
-    if re.search(r'صفر\s*کیلومتر',t):return 0
-    for pat in [r'کارکرد\s*[:\-]?\s*(\d{1,7})\s*(?:کیلومتر|km)?',r'(?<!\d)(\d{1,7})\s*(?:کیلومتر|km)']:
-        m=re.search(pat,t)
-        if m:
-            v=int(m.group(1))
-            if 0<=v<=2_000_000:return v
-    return None
+    from safety_v24 import mileage_from_description
+    return mileage_from_description(text)
 
 # Structured-data extraction only from an individual, public listing detail page.
 # Unknown schema or currency is never interpreted as an asking price.

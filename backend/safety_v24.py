@@ -39,8 +39,12 @@ def explicit_vehicle_price(text):
         # The nearest clause matters: a price in a different clause is not a fee.
         context=re.split(r'[،؛؛\n.]|\s+(?:ولی|اما|درحالی\s*که)\s+',context)[-1]
         context=context[-36:]
-        fee=bool(re.search(FEE,context))
-        asking=bool(re.search(ASK,context))
+        fee_hits=list(re.finditer(FEE,context))
+        ask_hits=list(re.finditer(ASK,context))
+        # "کارمزد X، قیمت خودرو Y": the explicit asking-price label for Y
+        # overrides an older fee label. A fee adjacent to Y still rejects it.
+        asking=bool(ask_hits)
+        fee=bool(fee_hits) and (not ask_hits or fee_hits[-1].start()>ask_hits[-1].start())
         candidates.append((amount,asking,fee))
     viable=[(a,explicit) for a,explicit,fee in candidates if not fee]
     if not viable:return None

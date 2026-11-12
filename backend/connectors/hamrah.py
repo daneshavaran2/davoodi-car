@@ -1,31 +1,32 @@
-import re
-from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value,listing_metadata,same_host
+"""Hamrah mechanic public listing connector, including hydrated JS cards."""
+import os,re
+from .common import fetch_html,token_score,matches_model,same_host
+from .extract import listing_cards_from_html, detail_fields
+
 BASE='https://www.hamrah-mechanic.com/cars-for-sale/'
 DOMAIN='hamrah-mechanic.com'
 
-def _detail(url,vehicle):
-    raw=fetch_html(url,timeout=6); text=text_from_html(raw);meta=listing_metadata(raw)
-    title=''
-    m=re.search(r'(?:خرید و فروش\s+)?([^|]{3,140}?)(?:\s+با ضمانت|\s+[–|-]\s+همراه مکانیک|$)',text)
-    if m:title=m.group(1).strip()
-    if not title:title=text[:180]
-    return {'url':url,'title':title,'content':text[:5000],'price':meta.get('price') or explicit_price(text),
-            'year':year_value(text),'mileage':meta.get('mileage') if meta.get('mileage') is not None else mileage_value(text),
-            'published_at':meta.get('published_at'),'kind':'listing'}
+
+def _is_detail(url):
+    return same_host(url,DOMAIN) and bool(re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',url))
+
 
 def search(vehicle,limit=25):
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''
     raw=fetch_html(BASE,timeout=8)
-    candidates=[]
-    for url,text in links_from_html(raw,BASE):
-        if not same_host(url,DOMAIN) or not re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',url):continue
-        if token_score(brand,model,text)<(.35 if model else .2):continue
-        candidates.append((url,text))
+    cards=listing_cards_from_html(raw,BASE,_is_detail,limit=limit)
     rows=[]
-    for url,text in candidates[:min(limit,5)]:
-        try:row=_detail(url,vehicle)
-        except RuntimeError:
-            row={'url':url,'title':text,'content':text,'price':explicit_price(text),
-                 'year':year_value(text),'mileage':mileage_value(text),'kind':'listing'}
-        if token_score(brand,model,row['title']+' '+row['content'])>=.45:rows.append(row)
+    max_detail=min(int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')),limit)
+    for card in cards:
+        if not matches_model(brand,model,card['title']+' '+card['content']):continue
+        if len(rows)<max_detail:
+            try:
+                more=detail_fields(fetch_html(card['url'],timeout=6),card['title'])
+                for key in ('price','year','mileage','published_at'):
+                    if more.get(key) is not None and (card.get(key) is None or key=='published_at'):
+                        card[key]=more[key]
+                if more.get('title') and matches_model(brand,model,more['title']):card['title']=more['title']
+                card['content']=(more.get('content') or card['content'])[:2200]
+            except (RuntimeError, LookupError, ValueError):pass
+        if matches_model(brand,model,card['title']+' '+card['content']): rows.append(card)
     return rows

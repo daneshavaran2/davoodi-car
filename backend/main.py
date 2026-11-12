@@ -724,7 +724,7 @@ def enforce_rate(client_key='default'):
                     _recent_calls_by_client.pop(key,None)
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'25.0.0-glance-ai-ux'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'26.0.0-playwright-market'}
 
 @app.get('/api/readiness')
 def readiness():
@@ -737,7 +737,10 @@ def readiness():
         database='error'
     status='ready' if database=='ok' else 'unavailable'
     return {'status':status,'database':database,'source_count':len(SOURCE_CONNECTORS),
-            'fallback_configured':bool(AVALAI_KEY),'version':'25.0.0-glance-ai-ux'}
+            'fallback_configured':bool(AVALAI_KEY),
+            'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
+            'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
+            'version':'26.0.0-playwright-market'}
 
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
@@ -1290,7 +1293,7 @@ def research_market(vehicle):
             mode = 'external'
             if rows is None:
                 rows = _builtin_connector(source, vehicle)
-                mode = 'builtin_public'
+                mode = 'builtin_playwright' if os.getenv('MARKET_FETCH_MODE','playwright').lower() == 'playwright' else 'builtin_public'
             return rows, mode, None
         except RuntimeError as exc:
             return None, 'builtin_or_external', str(exc)[:120]

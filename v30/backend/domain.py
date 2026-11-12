@@ -211,7 +211,7 @@ def clean_listing(payload,source,catalog_lookup,now=None):
                 'hybrid':'hybrid','دوگانه سوز':'dual','cng':'dual'}
     fuel=fuel_alias.get(fuel,'unknown')
     trans=normalize(payload.get('transmission') or '') or 'unknown'
-    if trans in ('اتوماتیک','automatic','at'):trans='automatic'
+    if trans in ('اتوماتیک','اتومات','automatic','at'):trans='automatic'
     if trans in ('دستی','manual','mt'):trans='manual'
     if trans not in ('automatic','manual'):return None,'UNKNOWN_TRANSMISSION'
     body=normalize(payload.get('body_condition') or '') or 'unknown'

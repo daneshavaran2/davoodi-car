@@ -1536,7 +1536,14 @@ def research_market(vehicle):
                 warnings.append('آگهی‌های اولیه دریافت شد، اما همگی در بررسی مشخصات/قیمت رد شدند؛ جزئیات ردشدن را در گزارش منابع ببینید.')
             else:
                 warnings.append('هیچ شاهد قیمت‌دار دریافت نشد. وضعیت هر سایت و خطاهای دسترسی را بررسی کنید؛ این وضعیت به معنی نبود خودرو در بازار نیست.')
-    summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
+    if broad_query:
+        # The pooled stats intentionally contain no overall price. An
+        # explanatory LLM is unnecessary and could imply a false single quote.
+        total=(overview or {}).get('listing_count',0)
+        summary=(f"{total} آگهی معتبر مرتبط بررسی شد. سال، تیپ و صفر/کارکرده جدا نمایش داده می‌شوند. "
+                 "این مبالغ قیمت پیشنهادی فروشندگان‌اند، نه قیمت قطعی معامله.")
+    else:
+        summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
     verified=set((new_stats.get('used_source_urls') or [])+(used_stats.get('used_source_urls') or []))
     # Do not expose obvious editorial/irrelevant pages as "source cards" in the UI.
     displayable=[x for x in normalized if x['accepted']]

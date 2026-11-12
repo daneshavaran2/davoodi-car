@@ -7,7 +7,7 @@ RUN npm run build
 
 FROM python:3.12-slim
 WORKDIR /app
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8000
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8000 FRONTEND_DIST=/app/frontend/dist
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/main.py ./main.py
@@ -16,5 +16,6 @@ COPY backend/vehicle_nlp.py ./vehicle_nlp.py
 COPY backend/safety_v24.py ./safety_v24.py
 COPY backend/connectors ./connectors
 COPY --from=frontend /web/dist /app/frontend/dist
+RUN test -s /app/frontend/dist/index.html && test -d /app/frontend/dist/assets
 EXPOSE 8000
 CMD ["sh","-c","uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers"]

@@ -105,7 +105,7 @@ async function search(e,custom,voiceData,forceRefresh=false){
  if(forceRefresh && lastSearchPayloadRef.current && lastSearchPayloadRef.current.query===term){
    payload={...lastSearchPayloadRef.current,refresh:true};
  }else{
-   payload={query:term,mileage:voiceData?.is_new?0:(voiceData?.mileage??(mileage!==''?Number(mileage):null)),
+   payload={query:term,mileage:voiceData ? (voiceData.is_new?0:(voiceData.mileage??null)) : (details&&mileage!==''?Number(mileage):null),
      condition:bodyDescription()?effectiveCondition():(voiceData?.condition||(condition==='بدون رنگ'?'نامشخص':condition)),
      color:effectiveColor()||voiceData?.color||null,transmission:transmission||voiceData?.transmission||null,
      brand:voiceData?.brand||null,model:voiceData?.model||null,year:voiceData?.year||null,

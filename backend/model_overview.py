@@ -28,6 +28,9 @@ def model_overview(vehicle, accepted, max_groups=8):
         trim=' '.join(str(item.get('trim') or 'نامشخص').strip().split())[:80]
         # Missing new/used evidence must never silently become "used".
         km=item.get('mileage')
+        if (item.get('is_new') is True and isinstance(km,int) and km>0) or (
+            item.get('is_new') is False and km == 0):
+            continue  # Contradictory new/used metadata must not reach any quote.
         if item.get('is_new') is True:
             kind='صفر'
         elif item.get('is_new') is False or (isinstance(km,int) and km>0):

@@ -1,6 +1,5 @@
-name: Davoodi Car v24 Verification
+name: Davoodi Car QA
 on:
-  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -29,9 +28,7 @@ jobs:
           python test_v21_market_fix.py
           python test_v22_intelligence.py
           python test_v23_quality.py
-          python test_v24_release.py
-          cd ..
-          python qa/test_static_serving_v24.py
+          python test_v24_safety.py
   frontend:
     runs-on: ubuntu-latest
     steps:
@@ -40,7 +37,9 @@ jobs:
         with:
           node-version: '22'
       - name: Browser-fallback regression (no external services)
-        run: node qa/test_frontend.cjs
+        run: |
+          node qa/test_frontend.cjs
+          node qa/test_v24_ux.cjs
       - run: cd frontend && npm install --no-audit --no-fund
       - run: cd frontend && npm run build
   docker:

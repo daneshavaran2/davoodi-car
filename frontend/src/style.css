@@ -483,19 +483,15 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 .search-panel button:focus-visible,.search-error button:focus-visible,.quick-actions button:focus-visible{outline:2px solid #ffd380;outline-offset:3px}
 @media(max-width:650px){.search-error{font-size:13px}.search-panel input,.search-panel button,.quick-actions button{min-height:44px}}
 
-/* v24: real source progress, data caution and responsive interaction */
-.search-live-progress{padding:12px 12px 6px;text-align:right;color:#ebd6b6}
-.search-progress-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px;margin-bottom:9px}
-.search-progress-heading b{font-variant-numeric:tabular-nums;min-width:36px;text-align:left}
-.live-sources{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
-.live-sources span{border:1px solid #ffffff26;background:#ffffff0c;border-radius:12px;padding:5px 9px;font-size:11px;color:#d9e3e8}
-.intel-review-warning{background:#c586341e;border:1px solid #d7a85e70;color:#f3d8a9;padding:12px 15px;line-height:1.9;border-radius:13px}
-@media(max-width:680px){.entry-mode-switch button,.search-btn{min-height:48px}.intel-review-warning{font-size:13px}.live-sources{flex-wrap:nowrap;overflow-x:auto;padding-bottom:6px}.live-sources span{white-space:nowrap}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
-
-.intel-review-details{margin:8px 0 15px;border:1px solid #ffffff32;border-radius:12px;padding:12px 14px;background:#ffffff07}
-.intel-review-details>summary{cursor:pointer;color:#f6d6a0;min-height:40px;display:flex;align-items:center;font-weight:700}
-.intel-review-list{display:grid;gap:8px;padding-top:10px}
-.intel-review-list>div{display:grid;gap:6px;padding:9px;background:#ffffff06;border-radius:9px}
-.intel-review-list a{color:#f4d3a5;overflow-wrap:anywhere}
-.intel-review-list small{color:#bfcedb;line-height:1.8}
+/* v24: mobile usability and reduced-motion accessibility */
+@media(max-width:680px){
+  .search-panel,.voice-review,.searching{scroll-margin-top:18px}
+  .quick-examples button,.entry-mode-switch button,.voice-btn,.voice-finish-btn,.search-btn{min-height:48px}
+  .intel-scroll{overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .intel-table-wrap{overflow:hidden}
+  .voice-review{padding:14px}
+  input,select,textarea{font-size:16px!important}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important}
+}

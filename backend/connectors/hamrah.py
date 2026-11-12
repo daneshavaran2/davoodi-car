@@ -1,16 +1,16 @@
 import re
-from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value,structured_listing_fields
+from .common import fetch_html,links_from_html,text_from_html,token_score,explicit_price,year_value,mileage_value,listing_metadata,same_host
 BASE='https://www.hamrah-mechanic.com/cars-for-sale/'
 DOMAIN='hamrah-mechanic.com'
 
 def _detail(url,vehicle):
-    raw=fetch_html(url,timeout=6); text=text_from_html(raw); meta=structured_listing_fields(raw)
+    raw=fetch_html(url,timeout=6); text=text_from_html(raw);meta=listing_metadata(raw)
     title=''
     m=re.search(r'(?:خرید و فروش\s+)?([^|]{3,140}?)(?:\s+با ضمانت|\s+[–|-]\s+همراه مکانیک|$)',text)
     if m:title=m.group(1).strip()
     if not title:title=text[:180]
     return {'url':url,'title':title,'content':text[:5000],'price':meta.get('price') or explicit_price(text),
-            'year':year_value(text),'mileage':mileage_value(text),
+            'year':year_value(text),'mileage':meta.get('mileage') if meta.get('mileage') is not None else mileage_value(text),
             'published_at':meta.get('published_at'),'kind':'listing'}
 
 def search(vehicle,limit=25):
@@ -18,7 +18,7 @@ def search(vehicle,limit=25):
     raw=fetch_html(BASE,timeout=8)
     candidates=[]
     for url,text in links_from_html(raw,BASE):
-        if not re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',url):continue
+        if not same_host(url,DOMAIN) or not re.search(r'/cars-for-sale/[^/]+/[^/]+/\d+/?$',url):continue
         if token_score(brand,model,text)<(.35 if model else .2):continue
         candidates.append((url,text))
     rows=[]

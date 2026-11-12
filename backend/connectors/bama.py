@@ -1,5 +1,5 @@
 import re
-from .common import fetch_html,links_from_html,norm,token_score,explicit_price,year_value,mileage_value,structured_listing_fields,text_from_html
+from .common import fetch_html,links_from_html,norm,token_score,explicit_price,year_value,mileage_value,listing_metadata,same_host
 BASE='https://bama.ir'
 DOMAIN='bama.ir'
 
@@ -7,7 +7,7 @@ def _best_link(links,brand,model=None):
     target=norm(' '.join(x for x in [brand,model] if x))
     ranked=[]
     for url,text in links:
-        if DOMAIN not in url:continue
+        if not same_host(url,DOMAIN):continue
         nt=norm(text)
         if not nt:continue
         score=token_score(brand,model,nt) if model else token_score(brand,'',nt)
@@ -31,20 +31,15 @@ def search(vehicle,limit=30):
     raw=fetch_html(page_url,timeout=8) if page_url!=brand_url else brand_html
     rows=[]
     for url,text in links_from_html(raw,page_url):
-        if 'bama.ir/car/detail-' not in url:continue
+        if not same_host(url,DOMAIN) or '/car/detail-' not in url:continue
         if token_score(brand,model,text)<(.45 if model else .35):continue
-        # Verification on the detail page is bounded; link text alone has no
-        # trustworthy publication date. A blocked detail page stays unverified.
-        metadata={}; description=text
-        if len(rows)<5:
-            try:
-                detail_html=fetch_html(url,timeout=5)
-                metadata=structured_listing_fields(detail_html)
-                description=text_from_html(detail_html)[:2500]
-            except (RuntimeError,KeyError,ValueError):pass
-        rows.append({'url':url,'title':text,'content':description,
-                     'price':metadata.get('price') or explicit_price(text),
-                     'year':year_value(text+' '+description),'mileage':mileage_value(text+' '+description),
-                     'published_at':metadata.get('published_at'),'kind':'listing'})
+        meta={}
+        if len(rows)<4:
+            # Only access explicitly public detail URLs, without login or CAPTCHA bypass.
+            try:meta=listing_metadata(fetch_html(url,timeout=5))
+            except (RuntimeError,LookupError):pass
+        rows.append({'url':url,'title':text,'content':text,'price':meta.get('price') or explicit_price(text),
+                     'year':year_value(text),'mileage':meta.get('mileage') if meta.get('mileage') is not None else mileage_value(text),
+                     'published_at':meta.get('published_at'),'kind':'listing'})
         if len(rows)>=limit:break
     return rows

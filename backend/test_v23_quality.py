@@ -59,7 +59,7 @@ class SearchQualityTests(unittest.TestCase):
         main._last_search[0]=0
 
     def test_health_and_login_auth(self):
-        self.assertEqual(client.get('/api/health').json()['version'],'24.0.0-release-candidate')
+        self.assertEqual(client.get('/api/health').json()['version'],'24.0.0-quality-security')
         self.assertEqual(client.post('/api/login',json={'password':'wrong'}).status_code,401)
         self.assertEqual(client.post('/api/search',json={'query':'سانتافه ۲۰۲۵'}).status_code,401)
 
@@ -72,14 +72,14 @@ class SearchQualityTests(unittest.TestCase):
 
     def test_manual_fidelity_variant_and_mileage(self):
         with patch.object(main,'research_market',side_effect=lambda v:{'vehicle':v}) as mock:
-            r=client.post('/api/search',json={'query':'فیتیلی پرایم مدل ۱۴۰۳ با کارکرد ۵۰ هزار کیلومتر بدون رنگ'},headers=self.headers)
+            r=client.post('/api/search',json={'query':'فیتیلی پرایم مدل ۱۴۰۳ با کارکرد ۵۰ هزار کیلومتر'},headers=self.headers)
         self.assertEqual(r.status_code,200,r.text)
         v=mock.call_args.args[0]
         self.assertEqual((v['brand'],v['model'],v['trim'],v['year'],v['mileage']),('بهمن موتور','فیدلیتی','پرایم',1403,50000))
 
     def test_explicit_fields_override_auto_parser(self):
         with patch.object(main,'research_market',side_effect=lambda v:{'vehicle':v}) as mock:
-            r=client.post('/api/search',json={'query':'سانتافه ۲۰۲۵ صفر','year':2024,'mileage':12345,'city':'تهران','condition':'بدون رنگ'},headers=self.headers)
+            r=client.post('/api/search',json={'query':'سانتافه ۲۰۲۵ صفر','year':2024,'mileage':12345,'city':'تهران'},headers=self.headers)
         self.assertEqual(r.status_code,200,r.text)
         v=mock.call_args.args[0]
         self.assertEqual((v['year'],v['mileage'],v['city']),(2024,12345,'تهران'))
@@ -108,7 +108,7 @@ class SearchQualityTests(unittest.TestCase):
     def test_cache_key_separates_year_and_mileage(self):
         def mock_search(vehicle):return {'vehicle':vehicle}
         with patch.object(main,'research_market',side_effect=mock_search) as p:
-            for row in [{'query':'فیدلیتی پرایم مدل ۱۴۰۳','mileage':0},{'query':'فیدلیتی پرایم مدل ۱۴۰۳','mileage':40000,'condition':'بدون رنگ'},{'query':'فیدلیتی پرایم مدل ۱۴۰۲','mileage':0}]:
+            for row in [{'query':'فیدلیتی پرایم مدل ۱۴۰۳','mileage':0},{'query':'فیدلیتی پرایم مدل ۱۴۰۳','mileage':40000},{'query':'فیدلیتی پرایم مدل ۱۴۰۲','mileage':0}]:
                 self.assertEqual(client.post('/api/search',json=row,headers=self.headers).status_code,200)
         self.assertEqual(p.call_count,3)
 
@@ -166,7 +166,7 @@ class SearchQualityTests(unittest.TestCase):
 
     def test_history_and_detail(self):
         with patch.object(main,'research_market',side_effect=lambda v:{'vehicle':v,'new':{},'used':{},'sources':[]}):
-            r=client.post('/api/search',json={'query':'فیدلیتی پرایم مدل ۱۴۰۱ صفر کیلومتر'},headers=self.headers)
+            r=client.post('/api/search',json={'query':'فیدلیتی پرایم مدل ۱۴۰۱'},headers=self.headers)
         self.assertEqual(r.status_code,200,r.text)
         hid=r.json()['history_id']
         self.assertEqual(client.get('/api/history/'+str(hid),headers=self.headers).status_code,200)

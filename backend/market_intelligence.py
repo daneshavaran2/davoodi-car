@@ -11,6 +11,7 @@ import math
 import re
 import statistics
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from safety_v24 import body_group, trim_status, exterior_color
 
 _DIGITS = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
 EDITORIAL = ('article', 'editorial', 'news', 'guide', 'category', 'unknown')
@@ -88,6 +89,8 @@ def score_evidence(item, vehicle, *, now=None, max_age_days=60):
         return 0, 'قیمت قابل استناد در صفحه وجود ندارد'
     if not canonical_url(item.get('url')):
         return 0, 'لینک معتبر نیست'
+    if item.get('is_new') is None and item.get('mileage') is None:
+        return 0, 'صفر یا کارکرده بودن خودرو در منبع مشخص نیست'
     model_cov = _token_coverage(vehicle.get('model'), text)
     brand_cov = _token_coverage(vehicle.get('brand'), text)
     # Brand in a model's text is not mandatory, but the requested model must match.
@@ -98,62 +101,54 @@ def score_evidence(item, vehicle, *, now=None, max_age_days=60):
             model_cov = 1
         else:
             return 0, 'مدل خودرو با درخواست تطابق ندارد'
-    requested_year=vehicle.get('year')
-    observed_year=item.get('year')
-    year_status=compatible_year(requested_year, observed_year)
-    if requested_year is not None and observed_year is None:
-        return 0, 'سال انتشار/مدل آگهی مشخص نیست؛ نیازمند تأیید کارشناس'
+    year_status = compatible_year(vehicle.get('year'), item.get('year'))
     if year_status is False:
         return 0, 'سال تولید با درخواست متفاوت است'
-    if requested_year is not None and year_status is None:
-        return 0, 'معادل سال شمسی/میلادی قطعی نیست؛ نیازمند تأیید کارشناس'
-    pub=parse_timestamp(item.get('published_at'))
-    age=(now-pub)/86400 if pub is not None else None
+    if vehicle.get('year') is not None and item.get('year') is None:
+        return 0, 'سال خودرو در آگهی مشخص نیست'
+    pub = parse_timestamp(item.get('published_at'))
+    age = (now - pub) / 86400 if pub is not None else None
     if age is not None and (age > max_age_days or age < -1):
         return 0, 'آگهی قدیمی یا دارای تاریخ نامعتبر است'
-    if age is None:
-        return 0, 'تاریخ انتشار آگهی نامعلوم است؛ نیازمند تأیید کارشناس'
-    request_trim=norm(vehicle.get('trim'))
-    item_trim=norm(item.get('trim'))
-    if request_trim and not item_trim:
-        return 0, 'تیپ آگهی نامعلوم است؛ نیازمند تأیید کارشناس'
-    if request_trim and request_trim!=item_trim:
+    # Do not mix different Fidelity trims, especially when the query is precise.
+    trim_check=trim_status(vehicle.get('trim'),item.get('trim'),text)
+    if trim_check is False:
         return 0, 'تیپ خودرو متفاوت است'
-    req_transmission=norm(vehicle.get('transmission'))
-    listed_transmission=norm(item.get('transmission'))
-    if req_transmission and req_transmission not in ('نامشخص','unknown'):
-        if not listed_transmission:
-            return 0, 'گیربکس آگهی مشخص نیست؛ نیازمند تأیید کارشناس'
-        if req_transmission!=listed_transmission:
-            return 0, 'نوع گیربکس خودرو متفاوت است'
-    req_condition=norm(vehicle.get('condition'))
-    listed_condition=norm(item.get('condition'))
-    if req_condition and req_condition not in ('نامشخص','unknown','تعیین نشده','صفر کیلومتر','نو','صفر'):
-        if not listed_condition:
-            return 0, 'وضعیت بدنه آگهی مشخص نیست؛ نیازمند تأیید کارشناس'
-        if req_condition=='بدون رنگ' and listed_condition!='بدون رنگ':
-            return 0, 'وضعیت بدنه آگهی با خودروی درخواستی متفاوت است'
-        if req_condition!='بدون رنگ' and listed_condition=='بدون رنگ':
-            return 0, 'آگهی سالم برای خودروی دارای آسیب بدنه قابل قیاس دقیق نیست'
-        # Both descriptions mention damage, but not necessarily the same parts.
-        # Do not invent a percentage adjustment for unknown panel/repair differences.
-        if req_condition!='بدون رنگ' and listed_condition!=req_condition:
-            return 0, 'نوع یا محل آسیب بدنه متفاوت/نامشخص است؛ نیازمند بررسی'
-    request_mileage=vehicle.get('mileage')
-    observed_mileage=item.get('mileage')
-    if item.get('is_new') and isinstance(observed_mileage,int) and observed_mileage>0:
-        return 0, 'تعارض صفر کیلومتر و کارکرد ثبت شده در آگهی'
-    if request_mileage == 0 and not item.get('is_new'):
+    if vehicle.get('trim') and trim_check is None and norm(vehicle.get('model')) in ('فیدلیتی','دیگنیتی'):
+        return 0, 'تیپ خودرو در آگهی مشخص نشده است'
+    requested_color=exterior_color(vehicle.get('color'))
+    observed_color=exterior_color(str(item.get('color') or '')+' '+title)
+    if requested_color and observed_color and requested_color!=observed_color:
+        return 0, 'رنگ خودرو با درخواست متفاوت است'
+    requested_body=body_group(vehicle.get('condition'))
+    observed_body=body_group(str(item.get('condition') or '')+' '+text)
+    # Body damage can move market value materially; don't put unknown-condition
+    # listings into a damage-specific quote.
+    if requested_body and observed_body and requested_body!=observed_body:
+        return 0, 'وضعیت بدنه با درخواست متفاوت است'
+    if requested_body and not observed_body:
+        return 0, 'وضعیت بدنه آگهی نامشخص است'
+    # Used/new comparison requires explicit mileage or an explicit zero-km signal.
+    requested_km=vehicle.get('mileage')
+    listed_km=item.get('mileage')
+    if requested_km == 0 and item.get('is_new') is not True:
         return 0, 'صفر کیلومتر بودن آگهی تأیید نشده است'
-    if request_mileage == 0 and observed_mileage not in (0,None):
+    if isinstance(requested_km,int) and requested_km>0 and item.get('is_new') is True:
+        return 0, 'خودروی صفر در استعلام کارکرده'
+    if isinstance(requested_km,int) and requested_km>0 and listed_km is None:
+        return 0, 'کارکرد آگهی مشخص نیست'
+    request_trim = norm(vehicle.get('trim'))
+    item_trim = norm(item.get('trim'))
+    if request_trim and item_trim and request_trim != item_trim:
+        return 0, 'تیپ خودرو متفاوت است'
+    request_mileage = vehicle.get('mileage')
+    observed_mileage = item.get('mileage')
+    if request_mileage == 0 and not item.get('is_new') and observed_mileage is None:
+        return 0, 'صفر کیلومتر بودن آگهی تأیید نشده است'
+    if request_mileage == 0 and observed_mileage not in (0, None):
         return 0, 'خودروی کارکرده در استعلام خودروی صفر'
-    if isinstance(request_mileage,int) and request_mileage>0:
-        if item.get('is_new'):
-            return 0, 'خودروی صفر در استعلام کارکرده'
-        if observed_mileage is None:
-            return 0, 'کارکرد آگهی مشخص نیست؛ نیازمند تأیید کارشناس'
-        if abs(request_mileage-observed_mileage)>max(20000,request_mileage*.4):
-            return 0, 'کارکرد آگهی با خودروی درخواستی اختلاف زیاد دارد'
+    if isinstance(request_mileage, int) and request_mileage > 0 and item.get('is_new'):
+        return 0, 'خودروی صفر در استعلام کارکرده'
     score = 0.0
     # Max: 30+10+15+10+10+7+10+8 = 100.
     score += 30 * (model_cov if model_cov is not None else .30)
@@ -193,7 +188,6 @@ def assess_and_dedupe(items, vehicle, *, now=None, min_score=42, max_age_days=60
         score, reason = score_evidence(item, vehicle, now=now, max_age_days=max_age_days)
         item['quality_score'] = score
         item['evidence_tier'] = 'آگهی مستقیم' if item.get('kind') == 'listing' else 'قیمت مرجع' if item.get('kind') == 'market_price' else 'اطلاعاتی'
-        item['review_required'] = bool(reason and ('نامعلوم' in reason or 'نیازمند' in reason or 'مشخص نیست' in reason or 'قطعی نیست' in reason))
         item['accepted'] = not reason and score >= min_score
         item['rejection_reason'] = reason or ('امتیاز تطابق و اعتبار کافی نیست' if score < min_score else None)
         if not item['accepted']:
@@ -253,7 +247,7 @@ def price_summary(items, target_mileage=None):
     listing_count = sum(x.get('kind') == 'listing' for x in clean)
     reference_count = sum(x.get('kind') == 'market_price' for x in clean)
     domains = len(set(x.get('domain') for x in clean))
-    valid_estimate = len(clean) >= 3 and listing_count >= 2 and domains >= 2
+    valid_estimate = len(clean) >= 3 and listing_count >= 2
     # Keep references as modest supporting data but never let references alone
     # create a market quote. Charts and raw values remain available.
     weights=[]
@@ -288,5 +282,5 @@ def price_summary(items, target_mileage=None):
         'observed_prices':prices, 'histogram':_histogram(prices),
         'outliers_removed':len(outliers),
         'pricing_note':('برآورد از آگهی‌های معتبر با وزن کمتر برای قیمت مرجع. امتیاز اطمینان، شاخص کیفیت داده است و احتمال آماری نیست.'
-                        if valid_estimate else 'شواهد محدود: برای برآورد دست‌کم ۳ شاهد تأییدشده، ۲ آگهی فروش و ۲ سایت مستقل لازم است.')
+                        if valid_estimate else 'شواهد محدود: برای برآورد دست‌کم ۳ شاهد معتبر، از جمله ۲ آگهی فروش لازم است.')
     }

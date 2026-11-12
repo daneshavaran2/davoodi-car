@@ -727,6 +727,22 @@ def enforce_rate(client_key='default'):
 @app.get('/api/health')
 def health(): return {'status':'ok','app':'davoodi-car','version':'26.0.0-playwright-market'}
 
+@app.get('/api/browser-check')
+def browser_check(_=Depends(authorized)):
+    """On-demand Chromium JS smoke test on Liara; no third-party requests."""
+    from connectors.browser import BrowserSession
+    session=BrowserSession()
+    try:
+        session._start()
+        session.page.set_content('<div id="probe"></div><script>document.getElementById("probe").textContent="js-ok"</script>')
+        session.page.wait_for_function('document.getElementById("probe").textContent==="js-ok"',timeout=2500)
+        return {'status':'ok','browser':'chromium','javascript':'ok'}
+    except Exception as exc:
+        logging.warning('Browser smoke test failed: %s',exc)
+        raise HTTPException(503,detail='Chromium در Liara قابل اجرا نیست: '+str(exc).splitlines()[0][:160])
+    finally:
+        session.close()
+
 @app.get('/api/readiness')
 def readiness():
     try:
@@ -740,6 +756,7 @@ def readiness():
     return {'status':status,'database':database,'source_count':len(SOURCE_CONNECTORS),
             'fallback_configured':bool(AVALAI_KEY),
             'market_fetch_mode':os.getenv('MARKET_FETCH_MODE','playwright').lower(),
+            'browser_check_endpoint':'/api/browser-check',
             'browser_connectors':['bama.ir','hamrah-mechanic.com','khodro45.com','divar.ir'],
             'version':'26.0.0-playwright-market'}
 
@@ -1552,6 +1569,18 @@ def resolve_search_vehicle(body: Search):
     }
 
 
+def _has_price_evidence(value):
+    if not isinstance(value,dict):return False
+    return bool((value.get('diagnostics') or {}).get('accepted',0) or
+        (value.get('used') or {}).get('sample_count',0) or
+        (value.get('new') or {}).get('sample_count',0))
+
+
+def _effective_cache_ttl(value):
+    # Do not keep "zero data" results for 15 minutes when connectivity recovers.
+    return CACHE_TTL if _has_price_evidence(value) else EMPTY_RESULT_CACHE_TTL
+
+
 @app.post('/api/search')
 async def search(body:Search, request:Request, _=Depends(authorized)):
     vehicle=resolve_search_vehicle(body)
@@ -1562,10 +1591,10 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
     key=json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
     with _cache_lock:
         cached=_cache.get(key)
-        if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
+        if cached and not body.refresh and time.time()-cached['at']<_effective_cache_ttl(cached['value']):
             return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
-    previous=saved(key,None if body.refresh else CACHE_TTL)
-    if previous and not body.refresh:
+    previous=saved(key,None)
+    if previous and not body.refresh and time.time()-previous['at']<_effective_cache_ttl(previous['value']):
         return {**previous['value'],'cached':True,'checked_at':previous['at'],'history_id':previous['id']}
     client_key=_client_login_key(request)
     def work():
@@ -1575,7 +1604,7 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
             progress_report('شروع بررسی',0,0)
             with _cache_lock:
                 cached=_cache.get(key)
-                if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
+                if cached and not body.refresh and time.time()-cached['at']<_effective_cache_ttl(cached['value']):
                     return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
             try:
                 enforce_rate(client_key)
@@ -1595,7 +1624,7 @@ async def search(body:Search, request:Request, _=Depends(authorized)):
                 with _cache_lock:
                     old=_cache.get(key)
                 if not old: old=saved(key,MAX_STALE_AGE)
-                if old and time.time()-old['at']<=MAX_STALE_AGE:
+                if old and _has_price_evidence(old['value']) and time.time()-old['at']<=MAX_STALE_AGE:
                     return {**old['value'],'cached':True,'stale':True,'checked_at':old['at'],'history_id':old.get('id'),
                             'warnings':old['value'].get('warnings',[])+['به دلیل محدودیت سرویس، آخرین نتیجه ذخیره‌شده نمایش داده می‌شود.']}
                 raise

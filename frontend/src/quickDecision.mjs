@@ -18,7 +18,16 @@ export function makeQuickDecision(result) {
   const score = Number.isFinite(Number(stats.confidence_score)) ? Math.min(100,Math.max(0,Math.round(Number(stats.confidence_score)))) : null;
   const estimate = stats.price_average;
   // Market estimates require enough real ads; reference-only or 1-2 results are not sufficient.
-  const priced = Boolean(v.model) && group !== null && count >= 3 && listings >= 2 && typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0;
+  const needsGrouping = v.year == null || (v.model==='فیدلیتی' && !v.trim);
+  const priced = Boolean(v.model) && group !== null && !needsGrouping &&
+    count >= 3 && listings >= 2 && typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0;
+  const priceGroups = (result?.price_groups || []).filter(g =>
+    g && typeof g.price_min==='number' && typeof g.price_max==='number' &&
+    g.price_min>0 && g.price_max>=g.price_min && Number(g.count)>=1 &&
+    (v.year==null || Number(g.year)===Number(v.year)) &&
+    (!v.trim || g.trim===v.trim || (v.model!=='فیدلیتی' && !g.trim)) &&
+    (group===null || (group==='new' ? g.condition==='صفر' : g.condition==='کارکرده'))
+  ).slice(0,6);
   const min = stats.suggested_min;
   const max = stats.suggested_max;
   const validRange = priced && typeof min === 'number' && typeof max === 'number' && min > 0 && max >= min;
@@ -32,14 +41,15 @@ export function makeQuickDecision(result) {
     typeof s.price === 'number' && Number.isFinite(s.price) &&
     s.price >= 50_000_000 && s.price <= 100_000_000_000) : [];
   const observedPrices = directListings.map(s=>s.price).sort((a,b)=>a-b);
-  const observed = !priced && observedPrices.length
+  const observed = !priced && !needsGrouping && observedPrices.length
     ? {min:observedPrices[0],max:observedPrices[observedPrices.length-1],count:observedPrices.length}
     : null;
   const limited = group !== null && count > 0 && !priced;
   const stale = Boolean(result?.stale);
   const kind = !group ? 'need-details' : priced ? (stale ? 'stale' : 'priced') : limited ? 'limited' : 'empty';
-  const heading = !group ? 'کارکرد خودرو را مشخص کنید' : priced ? (stale ? 'بازه حدودی ذخیره‌شده' : 'بازه حدودی قیمت بازار') : observed ? 'قیمت آگهی‌های مشابه' : limited ? 'اطلاعات قیمت محدود است' : 'قیمت قابل استناد پیدا نشد';
-  const next = !group ? 'کارکرد را وارد کنید یا عبارت «صفر کیلومتر» را بنویسید.'
+  const heading = priceGroups.length && needsGrouping ? 'قیمت‌های پیدا‌شده برای این مدل' : !group ? 'قیمت خودرو بدون تعیین کارکرد' : priced ? (stale ? 'بازه حدودی ذخیره‌شده' : 'بازه حدودی قیمت بازار') : observed ? 'قیمت آگهی‌های مشابه' : limited ? 'اطلاعات قیمت محدود است' : 'قیمت قابل استناد پیدا نشد';
+  const next = priceGroups.length && needsGrouping ? 'سال، تیپ و وضعیت خودروها جدا نمایش داده شده‌اند؛ برای بازه دقیق‌تر می‌توانید جزئیات را اضافه کنید.'
+    : !group ? 'برای قیمت دقیق‌تر، سال و کارکرد را نیز وارد کنید.'
     : priced && !stale ? 'پیش از معامله، مشخصات آگهی‌ها را با خودروی واقعی تطبیق دهید.'
     : stale ? 'برای قیمت جدید از دکمه «استعلام مجدد» استفاده کنید.'
     : observed ? 'این مبلغ فقط قیمت پیشنهادی فروشندگان است، نه قیمت قطعی معامله.' 
@@ -51,7 +61,7 @@ export function makeQuickDecision(result) {
     (acceptedUrls.has(s.url) || !priced) && (s.kind === 'listing' || s.kind === 'market_price') &&
     typeof s.url === 'string' && /^https:\/\//.test(s.url)) : [];
   const evidenceLinks = evidence.slice(0,2).map(s=>({title:s.category||s.domain||'منبع بازار',url:s.url}));
-  return {kind,group,title,heading,next,estimate:priced?estimate:null,observed,
+  return {kind,group,title,heading,next,estimate:priced?estimate:null,observed,priceGroups,
     range:validRange?{min,max}:null,median:priced&&typeof stats.price_median==='number'?stats.price_median:null,
     listings,domains,count,score,quality:stats.confidence||'نامشخص',evidenceLinks,
     cached:Boolean(result?.cached),stale,checkedAt:result?.checked_at??null,

@@ -36,3 +36,9 @@ def test_robust_quote_keeps_unknown_fuel_separate():
          'body_condition':'original','mileage_km':10000}
     two={**one,'fuel_type':'hybrid'}
     assert grouping_key(one)!=grouping_key(two)
+
+
+def test_tehran_hour_boundary_is_utc_half_hour():
+    dt=datetime(2026,11,12,20,5,tzinfo=timezone.utc)
+    with patch('backend.worker._now',return_value=dt):
+        assert next_hour('Asia/Tehran')==datetime(2026,11,12,20,30,tzinfo=timezone.utc)

@@ -527,3 +527,12 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 .market-source-pills span.bad{border-color:rgba(255,105,105,.55);color:#ffc3c3}
 .market-source-pills span.good{border-color:rgba(100,210,140,.6);color:#aaf4c8}
 .market-source-diagnostics small{opacity:.83;font-size:.78rem}
+
+/* v28: simple price ranges, safely separated by year, trim and condition. */
+.quick-price-groups{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px;margin:14px 0}
+.quick-price-group{padding:15px;border:1px solid rgba(148,163,184,.28);border-radius:13px;background:rgba(15,23,42,.13);display:flex;flex-direction:column;gap:7px}
+.quick-group-title{font-weight:650;font-size:.91rem}
+.quick-price-group strong{font-size:clamp(1rem,2vw,1.35rem);line-height:1.5}
+.quick-price-group small{font-size:.8rem;opacity:.75}
+.quick-group-links{display:flex;flex-wrap:wrap;gap:9px}
+.quick-group-links a{font-size:.81rem;text-decoration:underline;text-underline-offset:3px;display:inline-flex;align-items:center;gap:3px}

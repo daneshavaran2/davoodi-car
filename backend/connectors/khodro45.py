@@ -9,7 +9,7 @@ def search(vehicle,limit=20):
     brand=vehicle.get('brand') or '';model=vehicle.get('model') or ''
     rows=[]; seen=set()
     for path in ('price/','car-price/',''):
-        try:raw=fetch_html(BASE+path)
+        try:raw=fetch_html(BASE+path,timeout=8)
         except RuntimeError:continue
         for url,text in links_from_html(raw,BASE+path):
             if not url.startswith(BASE):continue

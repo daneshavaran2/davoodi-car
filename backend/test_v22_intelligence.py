@@ -112,7 +112,7 @@ class MarketIntelligenceTests(unittest.TestCase):
             'divar.ir':[{'url':'https://divar.ir/v/santafe/abc101','title':'هیوندای سانتافه 2025 صفر کیلومتر قیمت ۵ میلیارد و ۹۰۰ میلیون تومان','kind':'listing','year':2025,'mileage':0}],
             'sheypoor.com':[{'url':'https://sheypoor.com/s/abc101','title':'هیوندای سانتافه 2025 صفر کیلومتر قیمت ۶ میلیارد تومان','kind':'listing','year':2025,'mileage':0}],
         }
-        with patch.object(m,'_direct_connector',return_value=None),patch.object(m,'_builtin_connector',return_value=None),patch.object(m,'_search_fallback_domain',side_effect=lambda vehicle,source:fake_rows.get(source['domain'],[])):
+        with patch.object(m,'AVALAI_KEY','offline-mock-key'),patch.object(m,'_direct_connector',return_value=None),patch.object(m,'_builtin_connector',return_value=None),patch.object(m,'_search_fallback_domain',side_effect=lambda vehicle,source:fake_rows.get(source['domain'],[])):
             old=m.MAX_DOMAIN_REQUESTS;m.MAX_DOMAIN_REQUESTS=6
             try:
                 result=m.research_market(VEHICLE)

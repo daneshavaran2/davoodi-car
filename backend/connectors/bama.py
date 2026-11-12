@@ -19,16 +19,16 @@ def _best_link(links,brand,model=None):
 def search(vehicle,limit=30):
     brand=vehicle.get('brand') or ''; model=vehicle.get('model') or ''
     if not brand and not model:return []
-    home=fetch_html(BASE+'/car')
+    home=fetch_html(BASE+'/car',timeout=8)
     home_links=links_from_html(home,BASE)
     brand_url=_best_link(home_links,brand)
     if not brand_url:return []
-    brand_html=fetch_html(brand_url)
+    brand_html=fetch_html(brand_url,timeout=8)
     page_url=brand_url
     if model:
         model_url=_best_link(links_from_html(brand_html,brand_url),brand,model)
         if model_url:page_url=model_url
-    raw=fetch_html(page_url) if page_url!=brand_url else brand_html
+    raw=fetch_html(page_url,timeout=8) if page_url!=brand_url else brand_html
     rows=[]
     for url,text in links_from_html(raw,page_url):
         if 'bama.ir/car/detail-' not in url:continue

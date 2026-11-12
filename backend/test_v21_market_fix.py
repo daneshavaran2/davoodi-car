@@ -27,6 +27,7 @@ print('limited evidence:',limited)
 
 # Integration-style deterministic test without external network.
 orig_direct,orig_builtin,orig_fallback=m._direct_connector,m._builtin_connector,m._search_fallback_domain
+old_avalai=m.AVALAI_KEY; m.AVALAI_KEY='offline-mock-key'
 try:
     m._direct_connector=lambda source,vehicle: None
     m._builtin_connector=lambda source,vehicle: None
@@ -53,3 +54,4 @@ try:
 finally:
     m._direct_connector,m._builtin_connector,m._search_fallback_domain=orig_direct,orig_builtin,orig_fallback
     m.MAX_DOMAIN_REQUESTS=old_max
+    m.AVALAI_KEY=old_avalai

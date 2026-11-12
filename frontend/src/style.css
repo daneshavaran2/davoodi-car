@@ -466,3 +466,19 @@ footer{color:var(--dc-muted)!important;border-top:1px solid var(--dc-border)!imp
 @media(max-width:1050px){.intel-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.intelligence-overview{padding:14px}.intel-kpis,.intel-evidence-grid{grid-template-columns:minmax(0,1fr)}.intel-kpi{min-height:auto;padding:13px}.intel-header h3{font-size:20px}.intel-tabs{width:100%;justify-content:space-around}.intel-tabs button{flex:1}.intel-source-table{font-size:11px}}
 @media print{.intel-table-wrap,.intel-chart-wrap{break-inside:avoid}.intel-tabs{display:none}}
+/* v23 — accessible, low-friction search helpers */
+.quick-examples{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 4px 4px;color:var(--muted,#b7bccb);font-size:13px}
+.quick-examples button{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.17);color:inherit;border-radius:999px;padding:9px 12px;font:inherit;cursor:pointer;transition:background .15s,border-color .15s}
+.quick-examples button:hover,.quick-examples button:focus-visible{background:rgba(255,255,255,.13);border-color:rgba(255,213,128,.65)}
+.quick-examples button:disabled{opacity:.48;cursor:not-allowed}
+.detected-vehicle{display:inline-block;margin-top:9px;padding:7px 12px;border-radius:10px;background:rgba(59,194,127,.13);border:1px solid rgba(59,194,127,.3);font-size:13px}
+.detected-vehicle strong{color:inherit}
+.search-help{display:flex;align-items:flex-start;gap:12px;margin:18px 0;padding:18px;border:1px solid rgba(242,174,76,.35)}
+.search-help>svg{flex:none;color:#ffc26b;margin-top:2px}
+.search-help strong{display:block;margin-bottom:7px}
+.search-help p{margin:0 0 12px;line-height:1.9;opacity:.9}
+@media(max-width:650px){.quick-examples{gap:6px;margin-top:12px}.quick-examples button{min-height:44px;padding:10px}.search-help{padding:14px}}
+.search-error{display:flex;align-items:flex-start;gap:9px;padding:12px 15px;margin:12px 0;border-radius:12px;border:1px solid rgba(255,110,110,.45);background:rgba(171,38,45,.13);color:#ffe1e1;line-height:1.8;font-size:14px}
+.search-error svg{flex-shrink:0;margin-top:3px}
+.search-panel button:focus-visible,.search-error button:focus-visible,.quick-actions button:focus-visible{outline:2px solid #ffd380;outline-offset:3px}
+@media(max-width:650px){.search-error{font-size:13px}.search-panel input,.search-panel button,.quick-actions button{min-height:44px}}

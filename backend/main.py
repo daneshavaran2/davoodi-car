@@ -63,9 +63,17 @@ class Search(BaseModel):
     refresh: bool=False
 class CompareInput(BaseModel):
     ids: list[int]=Field(min_length=2,max_length=3)
+class _ManagedConnection(sqlite3.Connection):
+    """Ensure SQLite file handles are closed on every context-manager exit."""
+    def __exit__(self, typ, value, traceback):
+        try:
+            return super().__exit__(typ, value, traceback)
+        finally:
+            self.close()
+
 def db():
     Path(DB_PATH).parent.mkdir(parents=True,exist_ok=True)
-    c=sqlite3.connect(DB_PATH,timeout=15)
+    c=sqlite3.connect(DB_PATH,timeout=15,factory=_ManagedConnection)
     c.row_factory=sqlite3.Row
     c.execute('PRAGMA busy_timeout=15000')
     c.execute('CREATE TABLE IF NOT EXISTS searches(id INTEGER PRIMARY KEY AUTOINCREMENT, query TEXT NOT NULL, cache_key TEXT NOT NULL, result_json TEXT NOT NULL, created_at REAL NOT NULL)')
@@ -673,7 +681,7 @@ def enforce_rate():
         _last_search[0]=now
 
 @app.get('/api/health')
-def health(): return {'status':'ok','app':'davoodi-car','version':'22.0.0-market-intelligence'}
+def health(): return {'status':'ok','app':'davoodi-car','version':'23.0.0-search-qa-ux'}
 
 # Public vehicle reference photography from Wikimedia Commons (not an advert photo).
 # Images are separate from market-price sources and never treated as price evidence.
@@ -910,11 +918,11 @@ def login(body:Login):
     if not hmac.compare_digest(body.password.encode(),PASSWORD.encode()): raise HTTPException(401,'رمز عبور اشتباه است')
     return {'token':make_token(),'expires_in':28800}
 
-def post_json(url,payload,headers,service='سرویس خارجی'):
+def post_json(url,payload,headers,service='سرویس خارجی',timeout=32):
     request=Request(url,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),headers={'Content-Type':'application/json',**headers},method='POST')
     for attempt in range(2):
         try:
-            with urlopen(request,timeout=32) as response: return json.load(response)
+            with urlopen(request,timeout=timeout) as response: return json.load(response)
         except HTTPError as e:
             detail=e.read(500).decode(errors='replace')
             logging.warning('%s HTTP %s: %s',service,e.code,detail)
@@ -1049,31 +1057,60 @@ def _relevance(vehicle,title,content):
     if trim and trim in text:score+=5
     return round(min(100,score),1),year_ok
 
+def _structured_number(value, *, kind):
+    """Parse connector JSON values without mistaking a string value for evidence.
+
+    Price must carry an explicit amount; currency conversion is only performed
+    for values explicitly labeled as rial. Unknown formats return None.
+    """
+    if value is None or isinstance(value, bool): return None
+    if isinstance(value, (int, float)):
+        return int(value) if value >= 0 else None
+    if not isinstance(value, str): return None
+    raw=_norm_text(value).replace('٬','').replace(',','').strip()
+    if kind=='price':
+        if re.search(r'میلیارد|میلیون|تومان|ریال',raw):
+            return _price_from_text(raw)
+        if re.fullmatch(r'\d{7,13}',raw): return int(raw)
+        return None
+    if kind=='mileage':
+        m=re.fullmatch(r'(\d{1,7})\s*(هزار|کیلومتر|km)?',raw)
+        if m:
+            return int(m.group(1))*(1000 if m.group(2)=='هزار' else 1)
+        return None
+    if kind=='year':
+        if re.fullmatch(r'1[34]\d{2}|19\d{2}|20\d{2}',raw): return int(raw)
+    return None
+
+
 def _normalize_result(source,row,vehicle):
     from urllib.parse import urlparse
     url=str(row.get('url') or row.get('link') or '')
     title=str(row.get('title') or '')[:220]
     content=str(row.get('content') or row.get('snippet') or row.get('description') or '')[:2200]
     kind=str(row.get('kind') or _kind_from_url_title(url,title))
-    price=row.get('price')
-    if not isinstance(price,(int,float)) or isinstance(price,bool): price=_price_from_text(title+' '+content)
-    else: price=int(price)
+    price=_structured_number(row.get('price'),kind='price')
+    if price is None: price=_price_from_text(title+' '+content)
     # A source cannot turn an editorial URL into a listing by labeling it as one.
     if _kind_from_url_title(url,title)=='article': kind='article'
     if kind=='unknown' and source['domain'] in ('khodro45.com','karnameh.com') and price is not None:
         # These sources may expose reference-price pages without a stable listing URL pattern.
         # Editorial/category pages were already excluded by the classifier above.
         kind='market_price'
-    mileage=row.get('mileage') if isinstance(row.get('mileage'),int) else _mileage_from_text(title+' '+content)
-    year=row.get('year') if isinstance(row.get('year'),int) else _year_from_text(title+' '+content)
+    mileage=_structured_number(row.get('mileage'),kind='mileage')
+    if mileage is None: mileage=_mileage_from_text(title+' '+content)
+    year=_structured_number(row.get('year'),kind='year')
+    if year is None: year=_year_from_text(title+' '+content)
     score,year_ok=_relevance(vehicle,title,content)
     rejection=None
     if kind not in ('listing','market_price'): rejection='این نتیجه آگهی فروش یا مرجع قیمت معتبر نیست'
     elif score<45: rejection='مدل/تیپ با خودروی درخواستی تطابق کافی ندارد'
     elif not year_ok: rejection='سال آگهی با سال درخواستی متفاوت است'
     elif price is None: rejection='قیمت صریح قابل استخراج نیست'
-    host=(urlparse(url).hostname or '').removeprefix('www.')
-    is_new=bool(re.search(r'\b(صفر|صفرکیلومتر|صفر کیلومتر|تحویل فوری)\b',_norm_text(title+' '+content))) or mileage==0
+    host=(urlparse(url).hostname or '').lower().removeprefix('www.')
+    if not (host == source['domain'] or host.endswith('.' + source['domain'])):
+        rejection='لینک منبع خارج از دامنه رسمی سایت است'
+    is_new=(row.get('is_new') is True or bool(re.search(r'\b(صفر|صفرکیلومتر|صفر کیلومتر|تحویل فوری)\b',_norm_text(title+' '+content))) or mileage==0)
     return {'source':source['name'],'domain':host or source['domain'],'url':url,'title':title,'content':content,
             'kind':kind,'price':int(price) if price else None,'mileage':mileage,'year':year,
             'relevance':score,'is_new':is_new,'accepted':rejection is None,'rejection_reason':rejection,
@@ -1129,13 +1166,14 @@ def _fallback_query(vehicle,source):
 
 def _search_fallback_domain(vehicle,source):
     """Search a single source. Returned rows are still evidence-filtered afterwards."""
-    if not AVALAI_KEY:return []
+    if not AVALAI_KEY:
+        raise RuntimeError('جست‌وجوی تکمیلی فعال نیست: AVALAI_API_KEY در تنظیمات سرور وارد نشده است')
     q=_fallback_query(vehicle,source)
     key='market-v21:'+hashlib.sha256(q.casefold().encode()).hexdigest()
     hit=domain_saved(key,DOMAIN_CACHE_TTL)
     if hit:return hit.get('results',[])
     data=post_json('https://api.avalai.ir/v1/search/serper-search',{'query':q,'max_results':10,'hl':'fa'},
-                   {'Authorization':'Bearer '+AVALAI_KEY},source['name']+' search fallback')
+                   {'Authorization':'Bearer '+AVALAI_KEY},source['name']+' search fallback',timeout=18)
     rows=data.get('results',[]) if isinstance(data,dict) else []
     if not isinstance(rows,list):rows=[]
     domain_persist(key,{'results':rows,'query':q})
@@ -1165,7 +1203,7 @@ def _explain_market(vehicle,new_stats,used_stats,diagnostics):
              'اگر نمونه کمتر از ۳ است آن را فقط «شواهد محدود» بنام و قیمت قطعی یا میانگین بازار اعلام نکن.')
         r=post_json('https://api.openai.com/v1/chat/completions',{'model':OPENAI_MODEL,'temperature':0.1,
              'messages':[{'role':'system','content':sys},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}]},
-             {'Authorization':'Bearer '+OPENAI_KEY},'OpenAI explanation')
+             {'Authorization':'Bearer '+OPENAI_KEY},'OpenAI explanation',timeout=12)
         return str(r['choices'][0]['message']['content']).strip()[:1000]
     except Exception:
         return base
@@ -1173,66 +1211,102 @@ def _explain_market(vehicle,new_stats,used_stats,diagnostics):
 def research_market(vehicle):
     from urllib.parse import urlparse
     statuses=[]; normalized=[]; seen=set(); fallback_sources=[]
-    # 1) Direct/licensed and native public connectors first.
-    for source in SOURCE_CONNECTORS:
+    # 1) Independent public/official connectors in parallel. Waiting for each
+    # site sequentially could exceed the 105-second API deadline.
+    from concurrent.futures import ThreadPoolExecutor
+
+    def fetch_primary(source):
         try:
-            rows=_direct_connector(source,vehicle)
-            mode='external'
+            rows = _direct_connector(source, vehicle)
+            mode = 'external'
             if rows is None:
-                rows=_builtin_connector(source,vehicle)
-                mode='builtin_public'
+                rows = _builtin_connector(source, vehicle)
+                mode = 'builtin_public'
+            return rows, mode, None
+        except RuntimeError as exc:
+            return None, 'builtin_or_external', str(exc)[:120]
+        except Exception as exc:
+            logging.exception('Source connector failure: %s', source['domain'])
+            return None, 'builtin_or_external', 'خطای غیرمنتظره در کانکتور'
+
+    with ThreadPoolExecutor(max_workers=min(3,len(SOURCE_CONNECTORS))) as executor:
+        tasks={source['domain']:executor.submit(fetch_primary,source) for source in SOURCE_CONNECTORS}
+        for source in SOURCE_CONNECTORS:
+            rows,mode,error=tasks[source['domain']].result()
+            if error:
+                statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector_error',
+                                 'count':0,'raw_count':0,'accepted_count':0,'mode':mode,'detail':error})
+                fallback_sources.append(source)
+                continue
             if rows is None:
-                fallback_sources.append(source); continue
-            raw_count=len(rows[:50]); added=0
+                fallback_sources.append(source)
+                continue
+            raw_count=len(rows[:50]);added=0
             for row in rows[:50]:
                 item=_normalize_result(source,row,vehicle)
                 if not item['url'] or item['url'] in seen:continue
-                seen.add(item['url']); normalized.append(item); added+=1
+                seen.add(item['url']);normalized.append(item);added+=1
             accepted_count=sum(1 for x in normalized if x['source']==source['name'] and x['accepted'])
-            statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector','count':added,
-                             'raw_count':raw_count,'accepted_count':accepted_count,'mode':mode})
-            # A connector that found no useful evidence is allowed one focused fallback search.
+            statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector',
+                             'count':added,'raw_count':raw_count,'accepted_count':accepted_count,'mode':mode})
             if accepted_count==0:fallback_sources.append(source)
-        except RuntimeError as exc:
-            statuses.append({'name':source['name'],'domain':source['domain'],'status':'connector_error','count':0,
-                             'raw_count':0,'accepted_count':0,'mode':'builtin_or_external','detail':str(exc)[:120]})
-            fallback_sources.append(source)
 
-    # 2) Focused fallback: one query per source, capped to avoid rate bursts.
-    fallback_errors=[]; searched_domains=set()
-    dedup=[]
+    # 2) At most one focused fallback query per site, with a bounded worker
+    # pool. Do not claim 'no results' when the search key is not configured.
+    fallback_errors=[]; searched_domains=set();dedup=[]
     for source in fallback_sources:
         if source['domain'] not in searched_domains:
-            searched_domains.add(source['domain']); dedup.append(source)
-    for idx,source in enumerate(dedup[:MAX_DOMAIN_REQUESTS]):
-        try:
-            if idx and SEARCH_REQUEST_DELAY>0: time.sleep(SEARCH_REQUEST_DELAY)
-            rows=_search_fallback_domain(vehicle,source)
-            raw_count=len(rows); added=0; accepted_now=0
-            for row in rows:
-                url=str(row.get('url') or row.get('link') or '')
-                try: host=(urlparse(url).hostname or '').lower().removeprefix('www.')
-                except ValueError: continue
-                if not (host==source['domain'] or host.endswith('.'+source['domain'])):continue
-                item=_normalize_result(source,row,vehicle)
-                if not item['url'] or item['url'] in seen:continue
-                seen.add(item['url']); normalized.append(item); added+=1
-                if item['accepted']:accepted_now+=1
-            statuses.append({'name':source['name'],'domain':source['domain'],
-                             'status':'searched' if added else 'no_results','count':added,'raw_count':raw_count,
-                             'accepted_count':accepted_now,'mode':'focused_search_fallback'})
-        except RuntimeError as exc:
-            msg=str(exc); fallback_errors.append(source['name']+': '+msg)
-            statuses.append({'name':source['name'],'domain':source['domain'],
-                             'status':'rate_limited' if '429' in msg or 'محدود' in msg else 'error',
-                             'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback','detail':msg[:120]})
+            searched_domains.add(source['domain']);dedup.append(source)
+    candidates=dedup[:MAX_DOMAIN_REQUESTS]
+    if AVALAI_KEY and candidates:
+        # Enforce sequential requests when a nonzero per-request delay has been
+        # explicitly configured by the operator.
+        workers=1 if SEARCH_REQUEST_DELAY>0 else min(3,len(candidates))
+        def fetch_fallback(index,source):
+            if SEARCH_REQUEST_DELAY>0 and index:time.sleep(SEARCH_REQUEST_DELAY)
+            return _search_fallback_domain(vehicle,source)
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            tasks={source['domain']:executor.submit(fetch_fallback,i,source) for i,source in enumerate(candidates)}
+            for source in candidates:
+                try:
+                    rows=tasks[source['domain']].result()
+                    raw_count=len(rows);added=0;accepted_now=0
+                    for row in rows:
+                        url=str(row.get('url') or row.get('link') or '')
+                        try:host=(urlparse(url).hostname or '').lower().removeprefix('www.')
+                        except ValueError:continue
+                        if not (host==source['domain'] or host.endswith('.'+source['domain'])):continue
+                        item=_normalize_result(source,row,vehicle)
+                        if not item['url'] or item['url'] in seen:continue
+                        seen.add(item['url']);normalized.append(item);added+=1
+                        if item['accepted']:accepted_now+=1
+                    statuses.append({'name':source['name'],'domain':source['domain'],
+                                     'status':'searched' if added else 'no_results','count':added,'raw_count':raw_count,
+                                     'accepted_count':accepted_now,'mode':'focused_search_fallback'})
+                except RuntimeError as exc:
+                    msg=str(exc);fallback_errors.append(source['name']+': '+msg)
+                    statuses.append({'name':source['name'],'domain':source['domain'],
+                                     'status':'rate_limited' if '429' in msg or 'محدود' in msg else 'error',
+                                     'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
+                                     'detail':msg[:120]})
+                except Exception:
+                    logging.exception('Source fallback failure: %s',source['domain'])
+                    fallback_errors.append(source['name']+': خطای اتصال')
+                    statuses.append({'name':source['name'],'domain':source['domain'],'status':'error',
+                                     'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
+                                     'detail':'خطای غیرمنتظره اتصال'})
+    else:
+        for source in candidates:
+            statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_configured',
+                             'count':0,'raw_count':0,'accepted_count':0,'mode':'focused_search_fallback',
+                             'detail':'جست‌وجوی تکمیلی غیرفعال: AVALAI_API_KEY تنظیم نشده است'})
     for source in dedup[MAX_DOMAIN_REQUESTS:]:
-        statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_checked','count':0,
-                         'raw_count':0,'accepted_count':0,'mode':'fallback_budget'})
+        statuses.append({'name':source['name'],'domain':source['domain'],'status':'not_checked',
+                         'count':0,'raw_count':0,'accepted_count':0,'mode':'fallback_budget'})
 
     # Merge connector + fallback attempts into one readable status row per source.
     merged_status={}
-    rank={'evidence':6,'searched':5,'connector':4,'no_results':3,'not_checked':2,'connector_error':1,'rate_limited':1,'error':1}
+    rank={'evidence':6,'searched':5,'connector':4,'no_results':3,'not_configured':2,'not_checked':2,'connector_error':1,'rate_limited':1,'error':1}
     for st in statuses:
         d=merged_status.setdefault(st['domain'],{'name':st['name'],'domain':st['domain'],'status':st['status'],
             'count':0,'raw_count':0,'accepted_count':0,'modes':[]})
@@ -1269,6 +1343,8 @@ def research_market(vehicle):
             if 'تکراری' in x['rejection_reason']:diagnostics['duplicates_removed']+=1
             if 'قدیمی' in x['rejection_reason']:diagnostics['stale_removed']+=1
     warnings=[]
+    if not AVALAI_KEY:
+        warnings.append('کلید جست‌وجوی تکمیلی (AVALAI_API_KEY) تنظیم نشده است؛ برخی سایت‌ها تنها از طریق کانکتور عمومی بررسی شده‌اند.')
     if fallback_errors:warnings.append('برخی جست‌وجوهای منبع کامل نشدند: '+' | '.join(fallback_errors[:3]))
     if len(accepted)<3:
         if accepted:warnings.append('شواهد واقعی بازار پیدا شد، اما کمتر از ۳ نمونه است؛ فقط قیمت‌های مشاهده‌شده نمایش داده می‌شوند و میانگین بازار صادر نمی‌شود.')
@@ -1276,7 +1352,7 @@ def research_market(vehicle):
     summary=_explain_market(vehicle,new_stats,used_stats,diagnostics)
     verified=set((new_stats.get('used_source_urls') or [])+(used_stats.get('used_source_urls') or []))
     # Do not expose obvious editorial/irrelevant pages as "source cards" in the UI.
-    displayable=[x for x in normalized if x['accepted'] or (x['kind'] in ('listing','market_price') and x['relevance']>=45)]
+    displayable=[x for x in normalized if x['accepted']]
     sources=[{'title':x['title'],'url':x['url'],'category':x['source'],'kind':x['kind'],'domain':x['domain'],
               'price':x['price'],'mileage':x['mileage'],'year':x['year'],'relevance':x['relevance'],
               'accepted':x['accepted'],'rejection_reason':x['rejection_reason'],
@@ -1284,17 +1360,51 @@ def research_market(vehicle):
               'published_at':x.get('published_at'),'city':x.get('city'),'trim':x.get('trim')} for x in displayable]
     return {'summary':summary,'new':new_stats,'used':used_stats,'currency':'تومان','sources':sources,'image_url':None,
             'warnings':warnings,'site_status':statuses,'verified_source_urls':list(verified),'diagnostics':diagnostics,
-            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v22-market-intelligence','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
+            'vehicle':{k:vehicle.get(k) for k in ('brand','model','trim','year','mileage','city')},'engine':'v23-search-qa-ux','pricing_method':'اعتبارسنجی چندمعیاره + حذف تکراری و قدیمی + وزن‌دهی آگهی و مرجع + بازه واقعی' }
+
+def resolve_search_vehicle(body: Search):
+    """Resolve free-text manual searches before contacting paid/external sources.
+
+    Explicit structured fields take priority. Fuzzy-only NLP guesses are not
+    silently confirmed; users receive an actionable validation response.
+    """
+    raw = re.sub(r'\s+', ' ', body.query).strip()
+    spoken = parse_voice(raw)
+    brand = (body.brand or '').strip() or spoken.get('brand')
+    model = (body.model or '').strip() or spoken.get('model')
+    # The model must be explicit or confidently recognized; otherwise the query
+    # is too ambiguous to price without inventing relevance.
+    if not model:
+        suggestion = spoken.get('model_suggestion')
+        if suggestion:
+            hint = f"آیا منظورتان {suggestion.get('brand')} {suggestion.get('model')} است؟ نام مدل را اصلاح و تأیید کنید."
+        else:
+            hint = 'مدل خودرو مشخص نیست. برای مثال «هیوندای سانتافه مدل ۲۰۲۵ صفر کیلومتر» را وارد کنید.'
+        raise HTTPException(status_code=422, detail=hint)
+    year = body.year if body.year is not None else spoken.get('year')
+    mileage = body.mileage if body.mileage is not None else spoken.get('mileage')
+    if mileage is None and spoken.get('is_new'):
+        mileage = 0
+    trim = (body.trim or '').strip() or spoken.get('trim') or None
+    condition = (body.condition or '').strip() or spoken.get('condition') or None
+    transmission = (body.transmission or '').strip() or spoken.get('transmission') or None
+    color = (body.color or '').strip() or spoken.get('color') or None
+    city = (body.city or '').strip() or None
+    return {
+        'query': raw, 'brand': brand, 'model': model, 'year': year,
+        'mileage': mileage, 'condition': condition, 'transmission': transmission,
+        'color': color, 'trim': trim, 'city': city,
+    }
+
 
 @app.post('/api/search')
 async def search(body:Search, _=Depends(authorized)):
-    query=re.sub(r'\s+',' ',body.query).strip()
-    qualifiers=' '.join(str(x) for x in [body.brand,body.model,body.year,(str(body.mileage)+' کیلومتر' if body.mileage is not None else None),body.condition,body.transmission,body.color,body.trim,body.city] if x)
-    if qualifiers: query=(query+' '+qualifiers).strip()[:250]
-    # Search broadens color synonym coverage without changing the user's recorded color.
-    if body.color=='آلبالویی' or re.search(r'آلبالو|البالو',query):
-        query=(query+' قرمز زرشکی شرابی عنابی').strip()[:250]
-    key=query.casefold()
+    vehicle=resolve_search_vehicle(body)
+    query=vehicle['query']
+    # Price search context is structured and deterministic. Every market-relevant
+    # field participates in the cache key, so different years/trim/mileage cannot
+    # incorrectly share a cached quote.
+    key=json.dumps({k:vehicle.get(k) for k in ('brand','model','year','mileage','condition','transmission','color','trim','city')},ensure_ascii=False,sort_keys=True).casefold()
     with _cache_lock:
         cached=_cache.get(key)
         if cached and not body.refresh and time.time()-cached['at']<CACHE_TTL:
@@ -1310,8 +1420,6 @@ async def search(body:Search, _=Depends(authorized)):
                     return {**cached['value'],'cached':True,'checked_at':cached['at'],'history_id':cached.get('id')}
             try:
                 enforce_rate()
-                vehicle={'query':query,'brand':body.brand,'model':body.model,'year':body.year,'mileage':body.mileage,
-                         'condition':body.condition,'transmission':body.transmission,'color':body.color,'trim':body.trim,'city':body.city}
                 value=research_market(vehicle)
                 now=time.time()
                 history_id=persist(query,key,value)
@@ -1358,8 +1466,13 @@ def compare(body:CompareInput,_=Depends(authorized)):
     if len(rows)!=len(set(body.ids)) or any(r['cache_key'].startswith('domain:') for r in rows): raise HTTPException(404,'برخی گزارش‌ها پیدا نشدند')
     return {'items':[{'id':r['id'],'query':r['query'],'checked_at':r['created_at'],'new':json.loads(r['result_json']).get('new'),'used':json.loads(r['result_json']).get('used')} for r in rows]}
 
-app.mount('/assets',StaticFiles(directory='/app/frontend/dist/assets'),name='assets')
+FRONTEND_DIST = Path(os.getenv('FRONTEND_DIST', str(Path(__file__).resolve().parent.parent/'frontend'/'dist')))
+if (FRONTEND_DIST/'assets').is_dir():
+    app.mount('/assets', StaticFiles(directory=str(FRONTEND_DIST/'assets')), name='assets')
 @app.get('/{path:path}')
 def spa(path:str):
     if path.startswith('api/'): raise HTTPException(404)
-    return FileResponse('/app/frontend/dist/index.html')
+    index = FRONTEND_DIST/'index.html'
+    if not index.is_file():
+        raise HTTPException(503, 'رابط کاربری هنوز ساخته نشده است؛ در frontend دستور npm run build را اجرا کنید')
+    return FileResponse(str(index))

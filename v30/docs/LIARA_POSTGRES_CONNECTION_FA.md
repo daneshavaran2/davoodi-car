@@ -27,6 +27,10 @@ DB_WAIT_INTERVAL=3
 
 ```bash
 python -m scripts.check_liara_db
+# بعد از تأیید اینکه به دیتابیس مختص داودی‌کار وصل هستید:
+python -m scripts.setup_liara_postgres --apply
+# بررسی فقط‌خواندنی بعد از اجرای migration و import:
+python -m scripts.setup_liara_postgres
 ```
 
 تست باید پس از اتصال واقعی، `PostgreSQL connection established` و `vehicle_models table exists; rows: 660` را چاپ کند؛ رمز و URL محرمانه چاپ نمی‌شود.
@@ -56,3 +60,11 @@ curl -i https://YOUR_TEST_APP.liara.run/api/v1/health
 | صفحه قدیمی ورود دستی/صدا | React یا سرویس قدیمی هنوز منتشر است؛ کش و image مستقر را بررسی کنید |
 
 **امنیت:** توکن Liara که در گفتگو ارسال شده باید لغو و جایگزین شود. هیچ توکن یا رمز واقعی در مخزن ثبت نشود. این مستند راهنمای عملیاتی است، نه ادعای انجام اتصال.
+
+
+## ۴. وضعیت اجرا و نکات امنیتی
+- ساخت Instance جدید PostgreSQL در Liara ممکن است هزینه ایجاد کند؛ این مرحله بدون انتخاب پلن/شبکه در پنل انجام نشود.
+- اسکریپت `setup_liara_postgres --apply` **فقط داخل PostgreSQL موجود** جداول داودی‌کار را به‌صورت idempotent ایجاد/تکمیل کرده و کاتالوگ را upsert می‌کند؛ Instance جدید Liara ایجاد نمی‌کند.
+- اجرای دستور تنها وقتی درست است که متغیر `DATABASE_URL` به دیتابیس مخصوص برنامه داودی‌کار اشاره کند؛ روی دیتابیس برنامه‌های دیگر اجرا نکنید.
+- `source`ها بعد از migration به‌صورت پیش‌فرض **غیرفعال** می‌مانند و هیچ قیمت مصنوعی وارد نمی‌شود.
+- توکن مدیریتی یا `DATABASE_URL` را در GitHub Actions، issue، لاگ و پاسخ پشتیبانی کپی نکنید؛ فقط در Secrets/Environment بگذارید.

@@ -21,7 +21,7 @@ export function makeQuickDecision(result) {
   const needsGrouping = v.year == null || (v.model==='فیدلیتی' && !v.trim);
   const priced = Boolean(v.model) && group !== null && !needsGrouping &&
     count >= 3 && listings >= 2 && typeof estimate === 'number' && Number.isFinite(estimate) && estimate > 0;
-  const priceGroups = (result?.price_groups || []).filter(g =>
+  const priceGroups = (v.model ? (result?.price_groups || []) : []).filter(g =>
     g && typeof g.price_min==='number' && typeof g.price_max==='number' &&
     g.price_min>0 && g.price_max>=g.price_min && Number(g.count)>=1 &&
     (v.year==null || Number(g.year)===Number(v.year)) &&

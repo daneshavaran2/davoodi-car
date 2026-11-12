@@ -1,0 +1,35 @@
+name: DavoodiCar v30 offline-first QA
+on:
+  push:
+    branches: [main]
+    paths: ['v30/**', '.github/workflows/v30-qa.yml']
+  pull_request:
+    branches: [main]
+    paths: ['v30/**', '.github/workflows/v30-qa.yml']
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend requirements and test tools
+        run: python -m pip install -r v30/requirements.txt pytest httpx
+      - name: Unit and contract tests
+        run: cd v30 && python -m pytest -q && python -m compileall -q backend scripts
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: cd v30/frontend && npm install --no-audit --no-fund
+      - run: cd v30/frontend && npm run build
+  docker:
+    needs: [unit, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t davoodi:v30 v30

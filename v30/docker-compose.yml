@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: davoodicar
+      POSTGRES_USER: davoodi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U davoodi -d davoodicar"]
+      interval: 5s
+      retries: 15
+  web:
+    build: .
+    environment: &base_env
+      DATABASE_URL: postgresql://davoodi:${POSTGRES_PASSWORD}@postgres:5432/davoodicar
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+      FRONTEND_DIST: /app/frontend/dist
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: {condition: service_healthy}
+  worker:
+    build: .
+    command: ["sh","-c","python -m scripts.bootstrap && exec python -m backend.worker --loop"]
+    environment:
+      <<: *base_env
+      SCHEDULER_TZ: Asia/Tehran
+      SOURCE_DIVAR_API_URL: ${SOURCE_DIVAR_API_URL:-}
+      SOURCE_DIVAR_API_TOKEN: ${SOURCE_DIVAR_API_TOKEN:-}
+      SOURCE_BAMA_API_URL: ${SOURCE_BAMA_API_URL:-}
+      SOURCE_BAMA_API_TOKEN: ${SOURCE_BAMA_API_TOKEN:-}
+      SOURCE_SHEYPOOR_API_URL: ${SOURCE_SHEYPOOR_API_URL:-}
+      SOURCE_SHEYPOOR_API_TOKEN: ${SOURCE_SHEYPOOR_API_TOKEN:-}
+      SOURCE_HAMRAH_API_URL: ${SOURCE_HAMRAH_API_URL:-}
+      SOURCE_HAMRAH_API_TOKEN: ${SOURCE_HAMRAH_API_TOKEN:-}
+      SOURCE_KARNAMEH_API_URL: ${SOURCE_KARNAMEH_API_URL:-}
+      SOURCE_KARNAMEH_API_TOKEN: ${SOURCE_KARNAMEH_API_TOKEN:-}
+      SOURCE_KHODRO45_API_URL: ${SOURCE_KHODRO45_API_URL:-}
+      SOURCE_KHODRO45_API_TOKEN: ${SOURCE_KHODRO45_API_TOKEN:-}
+    depends_on:
+      postgres: {condition: service_healthy}
+volumes:
+  pgdata:

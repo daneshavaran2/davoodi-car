@@ -18,7 +18,7 @@ from pydantic import BaseModel,Field
 from . import storage
 from .domain import find_vehicle,query_year,query_trim,query_condition,normalize
 
-app=FastAPI(title='DavoodiCar Offline-First',version='30.0.0')
+app=FastAPI(title='DavoodiCar Offline-First',version='30.1.0')
 DIST=Path(os.getenv('FRONTEND_DIST','/app/frontend/dist'))
 
 
@@ -46,6 +46,12 @@ def public_limit(request:Request):
 
 
 def iso(v):return v.astimezone(timezone.utc).isoformat() if isinstance(v,datetime) else None
+
+
+@app.get('/api/live')
+def live():
+    """HTTP liveness only, without making a database query."""
+    return {'status':'alive','version':'30.1.0','readiness':'/api/v1/health'}
 
 
 @app.get('/api/v1/health')

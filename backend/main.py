@@ -1536,7 +1536,16 @@ def research_market(vehicle):
     # A source with no usable evidence is not counted as a successful source.
     # Persist checked/error/last-verified timestamps separately; old successful
     # price timestamps survive a later 429 or source outage.
-    statuses=record_source_results(db,statuses)
+    audit_error=False
+    try:
+        statuses=record_source_results(db,statuses)
+    except (sqlite3.Error, OSError) as exc:
+        logging.warning('Source status persistence unavailable: %s',exc)
+        audit_error=True
+        timestamp=time.time()
+        statuses=[{**st,'checked_at':timestamp if st.get('attempted') else None,
+                   'last_attempt_at':timestamp if st.get('attempted') else None,
+                   'last_verified_price_at':None} for st in statuses]
     diagnostics={'found':len(normalized),'accepted':len(accepted),'rejected':len(normalized)-len(accepted),
                  'reasons':{},'used_samples':used_stats.get('sample_count',0),'new_samples':new_stats.get('sample_count',0),
                  'articles_removed':0,'low_relevance_removed':0,'no_price_removed':0,
@@ -1550,6 +1559,8 @@ def research_market(vehicle):
             if 'تکراری' in x['rejection_reason']:diagnostics['duplicates_removed']+=1
             if 'قدیمی' in x['rejection_reason']:diagnostics['stale_removed']+=1
     warnings=[]
+    if audit_error:
+        warnings.append('ثبت تاریخچه وضعیت منابع در پایگاه داده ناموفق بود؛ تاریخچه بررسی‌های قبلی در این پاسخ در دسترس نیست.')
     inaccessible=[s['name'] for s in statuses if s.get('status') in ('connector_error','rate_limited','error')]
     if inaccessible:warnings.append('دسترسی یا استخراج در منابع زیر ناموفق بود؛ این موضوع به معنای نبود آگهی نیست: '+ '، '.join(inaccessible[:4]))
     if not AVALAI_KEY:

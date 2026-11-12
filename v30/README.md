@@ -1,3 +1,7 @@
+# 30.1 fix: Liara gateway 502
+
+Web now binds without PostgreSQL and returns JSON 503 until the database is ready. The independent worker remains fail-closed. [Persian guide](docs/HTTP502_LIARA_FA.md).
+
 # DavoodiCar v30 — offline-first vehicle asking-price search
 
 For full Persian setup/deployment instructions, see [README_FA.md](README_FA.md).

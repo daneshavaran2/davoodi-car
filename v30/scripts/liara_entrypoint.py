@@ -1,8 +1,8 @@
-"""Liara entrypoint: always expose the HTTP port even when PostgreSQL is down.
+"""Liara entrypoint: bind the HTTP port even when PostgreSQL is unavailable.
 
-The web service responds with JSON 503 while database bootstrap is pending.
-The independent collection worker remains fail-closed.
-Never log DATABASE_URL or authentication secrets.
+A missing database should yield truthful JSON 503 from FastAPI, not a gateway
+502 caused by an absent HTTP process. The independent worker remains fail-closed.
+Secrets (DSN/password) are never written to logs.
 """
 import os
 import sys
@@ -28,6 +28,8 @@ def _bootstrap_once():
 
 
 def _web_db_initializer():
+    # This daemon must never delay the web listener; an unconfigured database
+    # is a deployment problem, not a reason to return an HTML 502 error.
     attempts = 0
     while True:
         try:
@@ -49,14 +51,16 @@ def main() -> int:
         return 2
 
     if role == 'web':
-        # Start Uvicorn immediately; a failed database connection must not
-        # make the Liara reverse proxy report a gateway 502.
+        # Uvicorn binds immediately; bootstrap occurs in a separate thread.
+        # API health/search return structured JSON 503 until DB is ready.
         threading.Thread(target=_web_db_initializer, daemon=True, name='postgres-bootstrap').start()
         print(f'WEB_LISTEN: 0.0.0.0:{port}; POSTGRES_BOOTSTRAP=background', flush=True)
         import uvicorn
         uvicorn.run('backend.api:app', host='0.0.0.0', port=port, proxy_headers=True)
         return 0
 
+    # Worker is intentionally strict. Never pretend an hourly job is running
+    # when PostgreSQL is missing, misconfigured or uninitialized.
     attempts = max(1, min(30, int(os.getenv('DB_WAIT_ATTEMPTS', '12'))))
     interval = max(1, min(15, int(os.getenv('DB_WAIT_INTERVAL', '3'))))
     for index in range(attempts):

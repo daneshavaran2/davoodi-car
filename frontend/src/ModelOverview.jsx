@@ -21,12 +21,12 @@ export default function ModelOverview({overview}){
      </div>
      {g.limited&&<small className="simple-price-limited">نمونه محدود؛ فقط قیمت درج‌شده در آگهی‌ها</small>}
      <div className="simple-price-links">
-      {(g.links||[]).slice(0,2).filter(u=>typeof u==='string'&&/^https:\/\//.test(u)).map((url,j)=>
-       <a key={url+j} href={url} target="_blank" rel="noopener noreferrer">آگهی {j+1} <ExternalLink size={13}/></a>)}
+      {(g.ads||[]).slice(0,3).filter(a=>a&&typeof a.url==='string'&&/^https:\/\//.test(a.url)).map((a,j)=>
+       <a key={a.url+j} href={a.url} target="_blank" rel="noopener noreferrer">{a.source||a.domain||'آگهی'} <ExternalLink size={13}/></a>)}
      </div>
     </article>)}
    </div>
-   {overview.groups_total>groups.length&&<small>گروه‌های بیشتری وجود دارند که در این خلاصه نمایش داده نشده‌اند.</small>}
+   {overview.groups_total>groups.length&&<small>{Number(overview.groups_total-groups.length).toLocaleString('fa-IR')} گروه دیگر وجود دارد؛ برای محدودکردن نتیجه، سال یا تیپ را اضافه کنید.</small>}
    <small className="simple-price-note">{overview.note||'قیمت پیشنهادی فروشنده، الزاماً قیمت معامله نیست.'}</small>
  </section>;
 }

@@ -57,6 +57,7 @@ jobs:
           node qa/test_frontend.cjs
           node qa/test_v24_ux.cjs
           node qa/test_v25_quick_glance.mjs
+          node qa/test_v28_simple.mjs
       - run: cd frontend && npm install --no-audit --no-fund
       - run: cd frontend && npm run build
   docker:

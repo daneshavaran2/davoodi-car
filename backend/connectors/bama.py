@@ -40,11 +40,19 @@ def search(vehicle,limit=30):
         if model_url and model_url!=brand_url:
             page_url=model_url
             raw=fetch_html(page_url,timeout=8)
-    return _rows(raw,page_url,brand,model,limit)
+    rows=_rows(raw,page_url,brand,model,limit)
+    if rows:return rows
+    # The current marketplace layout may expose cards directly on the first
+    # brand page, even if its navigation sent us to a category landing page.
+    if page_url!=brand_url:
+        rows=_rows(brand_html,brand_url,brand,model,limit)
+    if not rows:
+        rows=_rows(home,BASE+'/car',brand,model,limit)
+    return rows
 
 
 def _rows(raw,url,brand,model,limit):
-    cards=listing_cards_from_html(raw,url,_is_detail,limit=limit)
+    cards=listing_cards_from_html(raw,url,_is_detail,limit=max(140,limit*5))
     rows=[];max_detail=min(int(os.getenv('MAX_DETAIL_PAGES_PER_SOURCE','6')),limit)
     for card in cards:
         if not matches_model(brand,model,card['title']+' '+card['content']):continue
@@ -61,6 +69,7 @@ def _rows(raw,url,brand,model,limit):
                 card['content']=(more.get('content') or card['content'])[:2200]
             except (RuntimeError, LookupError, ValueError):
                 # Retain card-level facts; final normalizer rejects incomplete data.
-                pass
+                card['detail_error']='دریافت جزئیات این آگهی ممکن نشد'
         rows.append(card)
+        if len(rows)>=limit:break
     return rows

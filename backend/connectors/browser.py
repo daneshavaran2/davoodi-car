@@ -18,7 +18,7 @@ _ALLOWED_HOSTS = frozenset({
 # The regex covers Bama, Hamrah Mechanic, Divar and reference-price pages.
 # Matching a link only signals hydration progress; normalizers still validate it.
 AD_LINK_READY_JS = r"""() => [...document.querySelectorAll('a[href]')].some(a =>
-    /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/v\/[^/]+\/[^/?#]+|\/price\//i.test(a.getAttribute('href') || ''))"""
+    /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/v\/(?:[^/?#]+\/)?[^/?#]+|\/price\//i.test(a.getAttribute('href') || ''))"""
 _local = threading.local()
 # Each Chromium instance can use hundreds of MiB. Bound concurrent browser
 # launches across parallel user searches inside this application process.

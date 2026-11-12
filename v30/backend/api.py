@@ -18,7 +18,7 @@ from pydantic import BaseModel,Field
 from . import storage
 from .domain import find_vehicle,query_year,query_trim,query_condition,normalize
 
-app=FastAPI(title='DavoodiCar Offline-First',version='30.0.0')
+app=FastAPI(title='DavoodiCar Offline-First',version='30.1.0')
 DIST=Path(os.getenv('FRONTEND_DIST','/app/frontend/dist'))
 
 
@@ -48,18 +48,51 @@ def public_limit(request:Request):
 def iso(v):return v.astimezone(timezone.utc).isoformat() if isinstance(v,datetime) else None
 
 
+@app.get('/api/live')
+def live():
+    """HTTP liveness only, without making a database query."""
+    return {'status':'alive','version':'30.1.0','readiness':'/api/v1/health'}
+
+
 @app.get('/api/v1/health')
 def health():
+    # The web process stays available while PostgreSQL is down; readiness
+    # remains 503 JSON until both schema and catalog are initialized.
+    error_code = 'DATABASE_URL_MISSING' if not os.getenv('DATABASE_URL', '').strip() else 'DATABASE_UNAVAILABLE'
+    if error_code == 'DATABASE_URL_MISSING':
+        return JSONResponse(status_code=503,content={'status':'unavailable',
+            'version':'30.1.0','database':'unavailable','error_code':error_code})
     try:
         with storage.connection() as db:
             with db.cursor() as cur:
-                cur.execute('SELECT 1 AS ok')
-                if cur.fetchone()['ok']!=1:raise RuntimeError('database health failed')
-        return {'status':'ok','version':'30.0.0','database':'ok',
-                'search_mode':'postgresql_only','scheduler':'independent_worker'}
+                cur.execute("SELECT to_regclass('public.vehicle_models') AS table_name")
+                if not cur.fetchone()['table_name']:
+                    error_code='SCHEMA_NOT_READY'
+                else:
+                    cur.execute('SELECT COUNT(*) AS n FROM vehicle_models')
+                    error_code='CATALOG_NOT_READY' if cur.fetchone()['n'] < 660 else None
+        if error_code is None:
+            return {'status':'ok','version':'30.1.0','database':'ok',
+                    'search_mode':'postgresql_only','scheduler':'independent_worker'}
     except Exception:
-        return JSONResponse(status_code=503,content={'status':'unavailable',
-             'version':'30.0.0','database':'unavailable'})
+        error_code='DATABASE_UNAVAILABLE'
+    return JSONResponse(status_code=503,content={'status':'unavailable',
+        'version':'30.1.0','database':'unavailable','error_code':error_code})
+
+
+@app.middleware('http')
+async def sanitized_database_error(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        module=type(exc).__module__
+        is_db_error=module.startswith('psycopg') or (
+            isinstance(exc,RuntimeError) and 'DATABASE_URL' in str(exc))
+        if not is_db_error:
+            raise
+        return JSONResponse(status_code=503,content={
+            'status':'unavailable','error_code':'DATABASE_UNAVAILABLE',
+            'detail':'پایگاه داده قیمت‌ها موقتاً در دسترس نیست. تنظیمات PostgreSQL در Liara بررسی شود.'})
 
 
 # Compatibility with the former Liara monitoring URLs.

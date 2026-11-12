@@ -13,9 +13,22 @@ const condition={new:'صفر کیلومتر',used:'کارکرده'};
 const quality={high:'بالا',medium:'متوسط',low:'پایین'};
 
 async function jsonFetch(url,options){
- const response=await fetch(url,options);
- let body={};try{body=await response.json()}catch{}
- if(!response.ok)throw new Error(response.status===429?'تعداد جست‌وجوها زیاد است؛ کمی بعد تلاش کنید.':body.detail||'اتصال به سرویس قیمت برقرار نشد.');
+ let response;
+ try{response=await fetch(url,{...options,headers:{...(options?.headers||{}),'Accept':'application/json'}})}
+ catch{throw new Error('اتصال به سرور برقرار نشد؛ وضعیت برنامه در Liara را بررسی کنید.');}
+ const contentType=response.headers.get('content-type')||'';
+ let body={};
+ if(contentType.includes('application/json')){
+   try{body=await response.json()}catch{}
+ }
+ if(!response.ok){
+   if([502,504].includes(response.status))throw new Error('سرور برنامه پاسخ نمی‌دهد (خطای '+response.status+'). راه‌اندازی Backend، پورت و گزارش‌های Liara بررسی شود.');
+   if(response.status===503)throw new Error('سرویس قیمت موقتاً آماده نیست؛ اتصال PostgreSQL و تنظیم DATABASE_URL در Liara بررسی شود.');
+   if(response.status===404)throw new Error('نسخه سایت و مسیر API هماهنگ نیستند؛ نسخه یکسان Frontend و Backend را منتشر کنید.');
+   if(response.status===429)throw new Error('تعداد جست‌وجوها زیاد است؛ کمی بعد تلاش کنید.');
+   throw new Error(typeof body.detail==='string'?body.detail:'دریافت پاسخ قیمت با خطای HTTP '+response.status+' انجام نشد.');
+ }
+ if(!contentType.includes('application/json'))throw new Error('API پاسخ JSON نداد؛ مسیر API یا نسخه منتشرشده را بررسی کنید.');
  return body;
 }
 function Icon({name,size=20}){

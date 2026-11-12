@@ -15,6 +15,10 @@ _ALLOWED_HOSTS = frozenset({
     'bama.ir', 'hamrah-mechanic.com', 'khodro45.com',
     'divar.ir', 'sheypoor.com', 'karnameh.com',
 })
+# The regex covers Bama, Hamrah Mechanic, Divar and reference-price pages.
+# Matching a link only signals hydration progress; normalizers still validate it.
+AD_LINK_READY_JS = r"""() => [...document.querySelectorAll('a[href]')].some(a =>
+    /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/v\/[^/]+\/[^/?#]+|\/price\//i.test(a.getAttribute('href') || ''))"""
 _local = threading.local()
 # Each Chromium instance can use hundreds of MiB. Bound concurrent browser
 # launches across parallel user searches inside this application process.
@@ -96,16 +100,15 @@ class BrowserSession:
                 raise RuntimeError('صفحه منبع خطای HTTP ' + str(response.status) + ' دارد')
             if not _valid_public_url(self.page.url):
                 raise RuntimeError('صفحه به دامنه خارج از منابع مجاز هدایت شد')
-            # Let client-rendered cards populate; never wait for ads/analytics
-            # to achieve network-idle. Max 1.2 seconds after DOM-ready.
+            # Wait for client-rendered listing links, including Divar's /v/ links.
+            # DOMContentLoaded alone is too early on hydrated marketplaces.
+            # Do not use networkidle; third-party analytics can remain active.
             try:
                 self.page.wait_for_function(
-                    """() => [...document.querySelectorAll('a[href]')].some(a =>
-                      /\/car\/detail-|\/cars-for-sale\/[^/]+\/[^/]+\/\d+|\/price\//.test(a.getAttribute('href') || ''))""",
-                    timeout=min(1100, max(250, int(timeout * 150))),
+                    AD_LINK_READY_JS, timeout=min(2800, max(800, int(timeout * 320)))
                 )
             except Exception:
-                self.page.wait_for_timeout(300)
+                self.page.wait_for_timeout(350)
             title = (self.page.title() or '').lower()
             visible = (self.page.locator('body').inner_text(timeout=2000) or '')[:2500].lower()
             if any(k in title or k in visible for k in ('captcha', 'کپچا', 'تأیید کنید ربات نیستید', 'verify you are human')):

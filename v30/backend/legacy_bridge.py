@@ -85,7 +85,7 @@ def _safe_listing(code,car,card):
     text_norm=normalize(combined)
     named=[name for name in ('پرایم','پرستیژ','الیت') if name in text_norm]
     if len(named)>1:return None
-    trim=named[0] if named else (query_trim(title) or query_trim(combined))
+    trim=query_trim(combined) if named else (query_trim(title) or query_trim(combined))
     gear=_explicit_gear(combined)
     mileage=card.get('mileage')
     try:
@@ -103,9 +103,19 @@ def _safe_listing(code,car,card):
     condition='new' if status else 'used'
     if condition=='used' and mileage<=0:return None
     from safety_v24 import body_group
-    body=body_group(combined)
-    body={'clean':'original','painted':'painted','damaged':'damaged',
-          'structural':'damaged','replaced':'damaged'}.get(body,'unknown')
+    # The string 'شاسی سالم' is NOT evidence of collision damage.
+    # Prefer a clearly labelled body-state field from the detail page.
+    explicit_body=re.search(r'وضعیت\s*بدنه\s*[:：]?\s*(بدون\s*رنگ|دو\s*لکه\s*رنگ|چند\s*لکه\s*رنگ|رنگ\s*شده|تصادفی|فابریک)',normalize(combined))
+    if explicit_body:
+        mark=explicit_body.group(1)
+        body=('original' if any(x in mark for x in ('بدون','فابریک')) else
+              'damaged' if 'تصادفی' in mark else 'painted')
+    else:
+        # Unknown is safer than treating an unqualified chassis mention as damage.
+        safe_text=re.sub(r'شاسی\s*سالم','',combined)
+        category=body_group(safe_text)
+        body={'clean':'original','painted':'painted','damaged':'damaged',
+              'structural':'damaged','replaced':'damaged'}.get(category,'unknown')
     # The strict v30 validator verifies catalog identity, currency and year.
     return {'source':code,'external_id':urlsplit(url).path.rsplit('/',1)[-1][:120],
             'url':url,'title':title,'brand':car['brand'],'model':car['model'],

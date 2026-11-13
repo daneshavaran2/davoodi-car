@@ -59,7 +59,7 @@ def query_year(q):
 def query_trim(q):
     nq=normalize(q)
     # Commercial variant names outrank gearbox words in matching.
-    named=[x for x in ('پرایم','پرستیژ','الیت') if re.search(r'(?<!\\w)'+x+r'(?!\\w)',nq)]
+    named=[x for x in ('پرایم','پرستیژ','الیت') if re.search(r'(?<!\w)'+x+r'(?!\w)',nq)]
     if len(named)==1:return named[0]
     if len(named)>1:return None
     for raw,canonical in sorted(TRIM_TERMS.items(), key=lambda kv:-len(kv[0])):

@@ -24,7 +24,13 @@ async function jsonFetch(url,options){
  }
  if(!response.ok){
    if([502,504].includes(response.status))throw new Error('سرور برنامه پاسخ نمی‌دهد (خطای '+response.status+'). راه‌اندازی Backend، پورت و گزارش‌های Liara بررسی شود.');
-   if(response.status===503)throw new Error('سرویس قیمت موقتاً آماده نیست؛ اتصال PostgreSQL و تنظیم DATABASE_URL در Liara بررسی شود.');
+   if(response.status===503){
+     if(url.startsWith('/api/v1/sources/status')||url.startsWith('/api/v1/admin/')){
+       if(body?.detail==='Admin credentials not configured')throw new Error('توکن مدیریت در برنامه اصلی Liara تنظیم نشده یا کمتر از ۳۲ کاراکتر است؛ ADMIN_TOKEN را تعریف کنید و Web را دوباره مستقر کنید.');
+       throw new Error('پنل مدیریت در دسترس نیست. ADMIN_TOKEN برنامه Web و وضعیت PostgreSQL را بررسی کنید.');
+     }
+     throw new Error('سرویس قیمت موقتاً آماده نیست؛ اتصال PostgreSQL و تنظیم DATABASE_URL در Liara بررسی شود.');
+   }
    if(response.status===404)throw new Error('نسخه سایت و مسیر API هماهنگ نیستند؛ نسخه یکسان Frontend و Backend را منتشر کنید.');
    if(response.status===429)throw new Error('تعداد جست‌وجوها زیاد است؛ کمی بعد تلاش کنید.');
    throw new Error(typeof body.detail==='string'?body.detail:'دریافت پاسخ قیمت با خطای HTTP '+response.status+' انجام نشد.');

@@ -116,7 +116,7 @@ def source_statuses():
             sources=cur.fetchall()
             cur.execute('SELECT * FROM scheduler_runs ORDER BY scheduled_for DESC LIMIT 1')
             schedule=cur.fetchone()
-            cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5')
+            cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5 AND stale_after>NOW()')
             prices=cur.fetchone()['n']
     return sources,schedule,prices
 

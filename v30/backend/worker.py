@@ -250,10 +250,12 @@ def run_once(scheduled_for=None):
                                        state['next_url'],state['page_depth'],metrics['pages'],len(valid)))
                                 cur.execute('''INSERT INTO public_crawl_history(
                                     source_code,started_at,finished_at,pages_crawled,cards_seen,
-                                    details_visited,models_scanned,priority_models,accepted_listings,
-                                    checkpoint_index) VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s)''',
+                                    details_visited,models_scanned,priority_models,skipped_models,error_codes,
+                                    accepted_listings,checkpoint_index)
+                                    VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)''',
                                     (code,started,metrics['pages'],metrics['cards'],
                                      metrics['details'],metrics['models'],metrics['priority_models'],
+                                     metrics['skipped_models'],json.dumps(metrics['errors'],ensure_ascii=False),
                                      len(valid),state['catalog_index']))
                         db.commit();good+=1
                     except SourceUnavailable as exc:

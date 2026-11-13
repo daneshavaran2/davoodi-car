@@ -16,7 +16,7 @@ STATE = {'phase': 'starting', 'bootstrapped': False, 'started_at': time.time()}
 def response_document(path):
     if path in ('/', '/api/live', '/health'):
         return 200, {'status': 'alive', 'service': 'davoodicar-worker',
-                     'version': '30.2.0', 'phase': STATE['phase'],
+                     'version': '30.4.0', 'phase': STATE['phase'],
                      'database_bootstrapped': STATE['bootstrapped'],
                      'source_access_verified': False}
     if path == '/api/worker/health':

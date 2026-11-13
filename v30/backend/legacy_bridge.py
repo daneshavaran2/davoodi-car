@@ -83,13 +83,13 @@ def _safe_listing(code,car,card):
     if not trim or not gear or mileage is None or not 0<=mileage<=2_000_000:return None
     # Explicit car mileage is required for used listings; zero-km requires
     # unequivocal zero-mileage text rather than only a numeric '0' widget.
-    from .safety_v24 import new_status
+    from safety_v24 import new_status
     status=new_status(combined,structured_mileage=mileage)
     if status is None:return None
     if status and mileage!=0:return None
     condition='new' if status else 'used'
     if condition=='used' and mileage<=0:return None
-    from .safety_v24 import body_group
+    from safety_v24 import body_group
     body=body_group(combined)
     body={'clean':'original','painted':'painted','damaged':'damaged',
           'structural':'damaged','replaced':'damaged'}.get(body,'unknown')

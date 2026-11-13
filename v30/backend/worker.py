@@ -27,6 +27,17 @@ ADVISORY_LOCK_ID=7428343991011
 def _now():return datetime.now(timezone.utc)
 
 
+def validate_with_public_extras(raw,code,mapping,now):
+    """Keep source evidence only after core listing fields pass validation."""
+    normalized,reason=clean_listing(raw,code,mapping,now=now)
+    if normalized and isinstance(raw,dict):
+        extras=raw.get('extra_fields')
+        if isinstance(extras,dict) and extras:
+            normalized['extra_fields']=extras
+    return normalized,reason
+
+
+
 def _schedule_slot():
     """A predictable 15/30/60-minute UTC instant in Tehran local time."""
     zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
@@ -221,7 +232,7 @@ def run_once(scheduled_for=None):
                                                  max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8')))
                         valid=[]; reasons=defaultdict(int)
                         for raw in items:
-                            x,reason=clean_listing(raw,code,mapping,now=started)
+                            x,reason=validate_with_public_extras(raw,code,mapping,started)
                             if x:valid.append(x)
                             else:reasons[reason]+=1
                         # Network and parser fully succeeded before data is written.

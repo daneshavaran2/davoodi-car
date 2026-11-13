@@ -18,7 +18,7 @@ from pydantic import BaseModel,Field
 from . import storage
 from .domain import find_vehicle,query_year,query_trim,query_condition,normalize
 
-app=FastAPI(title='DavoodiCar Offline-First',version='30.3.0')
+app=FastAPI(title='DavoodiCar Offline-First',version='30.4.0')
 DIST=Path(os.getenv('FRONTEND_DIST','/app/frontend/dist'))
 
 
@@ -50,18 +50,18 @@ def iso(v):return v.astimezone(timezone.utc).isoformat() if isinstance(v,datetim
 
 @app.get('/api/live')
 def live():
-    """HTTP liveness only, without making a database query."""
-    return {'status':'alive','version':'30.3.0','readiness':'/api/v1/health'}
+    # Liveness of the HTTP process, independent of database readiness.
+    return {'status':'alive','version':'30.4.0','readiness':'/api/v1/health'}
 
 
 @app.get('/api/v1/health')
 def health():
-    # The web process stays available while PostgreSQL is down; readiness
-    # remains 503 JSON until both schema and catalog are initialized.
+    # Report 503 in JSON while PostgreSQL is unconfigured, disconnected or
+    # missing the schema. A 200 SELECT 1 alone is NOT application readiness.
     error_code = 'DATABASE_URL_MISSING' if not os.getenv('DATABASE_URL', '').strip() else 'DATABASE_UNAVAILABLE'
     if error_code == 'DATABASE_URL_MISSING':
         return JSONResponse(status_code=503,content={'status':'unavailable',
-            'version':'30.3.0','database':'unavailable','error_code':error_code})
+            'version':'30.4.0','database':'unavailable','error_code':error_code})
     try:
         with storage.connection() as db:
             with db.cursor() as cur:
@@ -72,16 +72,18 @@ def health():
                     cur.execute('SELECT COUNT(*) AS n FROM vehicle_models')
                     error_code='CATALOG_NOT_READY' if cur.fetchone()['n'] < 660 else None
         if error_code is None:
-            return {'status':'ok','version':'30.3.0','database':'ok',
+            return {'status':'ok','version':'30.4.0','database':'ok',
                     'search_mode':'postgresql_only','scheduler':'independent_worker'}
     except Exception:
         error_code='DATABASE_UNAVAILABLE'
     return JSONResponse(status_code=503,content={'status':'unavailable',
-        'version':'30.3.0','database':'unavailable','error_code':error_code})
+        'version':'30.4.0','database':'unavailable','error_code':error_code})
 
 
 @app.middleware('http')
 async def sanitized_database_error(request, call_next):
+    # Converts database connectivity failures to JSON for a clear UI message;
+    # unrelated programming bugs still propagate to the server logs.
     try:
         return await call_next(request)
     except Exception as exc:
@@ -164,13 +166,46 @@ def estimate(q:str=Query(min_length=2,max_length=100),
           'ads':[{'source':a['source_code'],'url':a['url'],'price_toman':a['price_toman']}
                   for a in r['ads'] if str(a['url']).startswith('https://')]
         })
+    # Third-party aggregates have a distinct schema and are never counted as
+    # individual DavoodiCar listings or merged into independent ad samples.
+    aggregate_groups=[]
+    if co != 'new':
+        try:
+            with storage.connection() as aggregate_db:
+                with aggregate_db.cursor() as aggregate_cur:
+                    aggregate_sql=("SELECT trim_name,model_year,year_system,low_toman,median_toman,"
+                        "high_toman,data_points,coverage,computed_at,source_url,source_key "
+                        "FROM aggregate_vehicle_prices WHERE vehicle_catalog_id=%s "
+                        "AND computed_at>NOW()-INTERVAL '48 hours'")
+                    aggregate_params=[car['catalog_id']]
+                    if y is not None:aggregate_sql+=' AND model_year=%s';aggregate_params.append(y)
+                    if tr:aggregate_sql+=' AND trim_name ILIKE %s';aggregate_params.append('%'+tr+'%')
+                    aggregate_sql+=' ORDER BY model_year DESC,computed_at DESC LIMIT 16'
+                    aggregate_cur.execute(aggregate_sql,aggregate_params)
+                    for x in aggregate_cur.fetchall():
+                        aggregate_groups.append({
+                            'year':x['model_year'],'year_system':x['year_system'],
+                            'trim':x['trim_name'],'condition':'used','body_condition':'healthy',
+                            'low_toman':x['low_toman'],'median_toman':x['median_toman'],
+                            'high_toman':x['high_toman'],'data_points':x['data_points'],
+                            'coverage':x['coverage'],'computed_at':iso(x['computed_at']),
+                            'source_name':'نمودا','source_url':x['source_url'],
+                            'source_key':x['source_key']})
+        except Exception:
+            # Old deployments without migration 003 stay readable; no fake values.
+            aggregate_groups=[]
+    if not groups and aggregate_groups:
+        return {'status':'aggregate','vehicle':car['display_name'],
+                'message':'آمار قیمت کارکرده از نمودا (منبع تجمیعی مستقل؛ نه آگهی فردی).',
+                'groups':[],'aggregates':aggregate_groups,
+                'duration_ms':round((time.monotonic()-t0)*1000)}
     if not groups:
         # Queue the request for next independent worker tick. A pending job
         # does NOT block the user while scraping and has no invented price.
         try:storage.request_refresh(car['catalog_id'],y,tr)
         except Exception:pass
-        # No external website fetch; this diagnostic is one small PostgreSQL read.
-        # A catalog of 660 vehicles alone never creates real asking prices.
+        # Distinguish missing market feeds from an insufficient comparable sample.
+        # This query is PostgreSQL-only; no website scraping in user requests.
         summary=None
         try:
             with storage.connection() as db:
@@ -183,31 +218,48 @@ def estimate(q:str=Query(min_length=2,max_length=100),
         except Exception:
             pass
         reason=('sources_inactive' if summary and not summary['enabled'] else
-                'no_verified_prices' if summary and not summary['priced_segments'] else
-                'insufficient_sample')
-        message=('هیچ منبع قیمت فعالی تنظیم نشده است. کاتالوگ خودروها قیمت روز ندارد؛ مدیر باید فید یا API مجاز را به Worker متصل کند.'
+                'no_verified_prices' if summary and not summary['priced_segments'] else 'insufficient_sample')
+        message=('هیچ منبع قیمت فعالی تنظیم نشده است. کاتالوگ خودروها شامل قیمت روز نیست؛ مدیر باید فید/API مجاز را به Worker متصل کند.'
                  if reason=='sources_inactive' else
-                 'هنوز هیچ بازه قیمتی از آگهی‌های معتبر ذخیره نشده است. وضعیت Worker و خطاهای منابع را در پنل مدیریت بررسی کنید.'
+                 'هنوز هیچ بازه قیمتی از منابع واقعی و تأییدشده ذخیره نشده است. وضعیت Worker و خطاهای منابع را در پنل مدیریت بررسی کنید.'
                  if reason=='no_verified_prices' else
-                 'برای این مدل یا تیپ، دست‌کم ۵ آگهی هم‌گروه معتبر و به‌روز وجود ندارد. درخواست بررسی ثبت شد.')
+                 'برای این مدل/سال/تیپ، حداقل ۵ آگهی معتبرِ هم‌گروه و به‌روز پیدا نشده است. درخواست بررسی ثبت شد.')
         return {'status':'no_data','vehicle':car['display_name'],
                 'message':message,'reason':reason,'source_summary':summary,
-                'groups':[], 'duration_ms':round((time.monotonic()-t0)*1000)}
+                'groups':[], 'aggregates':aggregate_groups, 'duration_ms':round((time.monotonic()-t0)*1000)}
     return {'status':'ok','vehicle':car['display_name'],
-            'groups':groups[:12],'message':'قیمت‌های پیشنهادی آگهی‌ها؛ نه قیمت قطعی معامله.',
+            'groups':groups[:12],'aggregates':aggregate_groups,'message':'قیمت‌های پیشنهادی آگهی‌ها؛ نه قیمت قطعی معامله.',
             'duration_ms':round((time.monotonic()-t0)*1000)}
 
 
 @app.get('/api/v1/sources/status')
 def sources_status(_=Depends(admin_only)):
     rows,schedule,coverage=storage.source_statuses()
-    return {'sources':[{**r,'access_verified_at':iso(r['access_verified_at']),
+    aggregates=[]
+    with storage.connection() as db:
+        with db.cursor() as cur:
+            cur.execute('SELECT code,display_name,enabled,last_attempt_at,last_success_at,last_error_code,last_error_detail,rows_saved FROM aggregate_market_sources ORDER BY code')
+            for x in cur.fetchall():
+                aggregates.append({**x,'last_attempt_at':iso(x['last_attempt_at']),'last_success_at':iso(x['last_success_at'])})
+    return {'aggregated_sources':aggregates,'sources':[{**r,'access_verified_at':iso(r['access_verified_at']),
                          'last_attempt_at':iso(r['last_attempt_at']),
                          'last_success_at':iso(r['last_success_at'])} for r in rows],
             'last_scheduler_run':{**schedule,'scheduled_for':iso(schedule['scheduled_for']),
                                   'started_at':iso(schedule['started_at']),
                                   'finished_at':iso(schedule['finished_at'])} if schedule else None,
             'priced_segments':coverage}
+
+
+
+@app.post('/api/v1/admin/aggregates/{code}')
+def admin_aggregate(code:str,data:dict,_=Depends(admin_only)):
+    if code!='nemuda':raise HTTPException(status_code=404,detail='Unknown aggregate source')
+    if not isinstance(data.get('enabled'),bool):raise HTTPException(status_code=422,detail='enabled must be boolean')
+    with storage.connection() as db:
+        with db.cursor() as cur:
+            cur.execute('UPDATE aggregate_market_sources SET enabled=%s WHERE code=%s',(data['enabled'],code))
+        db.commit()
+    return {'status':'ok','code':code,'enabled':data['enabled']}
 
 
 class SourceState(BaseModel):
@@ -269,3 +321,4 @@ def index():
 
 if (DIST/'assets').is_dir():
     app.mount('/assets',StaticFiles(directory=str(DIST/'assets')),name='assets')
+

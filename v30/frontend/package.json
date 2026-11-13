@@ -1,6 +1,6 @@
 {
   "name": "davoodi-car-v30",
-  "version": "30.3.0",
+  "version": "30.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,3 +16,4 @@
     "vite": "6.4.6"
   }
 }
+

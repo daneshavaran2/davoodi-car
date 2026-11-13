@@ -17,6 +17,7 @@ from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
 from . import nemuda
+from .legacy_bridge import pilot_mode, collect_public
 
 log=logging.getLogger('davoodicar.worker')
 ADVISORY_LOCK_ID=7428343991011
@@ -165,7 +166,7 @@ def run_once(scheduled_for=None):
                     db.rollback()
                     return {'status':'duplicate_hour'}
                 db.commit()
-                cur.execute('''SELECT catalog_id,brand,model FROM vehicle_models''')
+                cur.execute('''SELECT catalog_id,brand,model,display_name FROM vehicle_models''')
                 catalog=cur.fetchall()
                 mapping={(normalize(x['brand']),normalize(x['model'])):x['catalog_id'] for x in catalog}
                 cur.execute('SELECT code,enabled FROM data_sources ORDER BY code')
@@ -182,7 +183,8 @@ def run_once(scheduled_for=None):
                         db.commit();continue
                     try:
                         # Licensed source adapters may serve all catalog models in one feed.
-                        items=collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8')))
+                        items=(collect_public(code,catalog) if pilot_mode(code) else
+                               collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8'))))
                         valid=[]; reasons=defaultdict(int)
                         for raw in items:
                             x,reason=clean_listing(raw,code,mapping,now=started)

@@ -79,7 +79,8 @@ def _safe_listing(code,car,card):
     combined=title+' '+content
     # A bare price widget plus an unrelated 'تومان' fee is not price evidence.
     price=card.get('price')
-    if not explicit_price_matches(price,combined):return None
+    price_evidence=card.get('_price_evidence_text') or combined
+    if not explicit_price_matches(price,price_evidence):return None
     year=card.get('year') or query_year(title)
     # Named commercial variants outrank generic gearbox words (Prime vs AT).
     text_norm=normalize(combined)

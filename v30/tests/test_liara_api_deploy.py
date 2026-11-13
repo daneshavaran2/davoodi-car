@@ -61,3 +61,39 @@ def test_dry_run_requires_no_token(monkeypatch,capsys):
     rc=liara.main(['--dry-run'])
     assert rc==0
     assert 'DRY_RUN_OK' in capsys.readouterr().out
+
+def test_web_bundle_has_frontend_and_quality_migration_without_worker_image():
+    bundle=liara.make_archive(role='web')
+    with zipfile.ZipFile(io.BytesIO(bundle)) as z:
+        names=set(z.namelist())
+        dockerfile=z.read('Dockerfile').decode('utf-8')
+    assert 'frontend/package.json' in names
+    assert 'frontend/src/main.jsx' in names
+    assert 'database/005_quality_audits.sql' in names
+    assert 'backend/quality.py' in names
+    assert 'build-frontend' in dockerfile
+    assert 'requirements.worker.txt' not in names
+
+
+def test_worker_bundle_includes_quality_and_browser_no_frontend():
+    bundle=liara.make_archive(role='worker')
+    with zipfile.ZipFile(io.BytesIO(bundle)) as z:
+        names=set(z.namelist())
+        dockerfile=z.read('Dockerfile').decode('utf-8')
+    assert 'backend/quality.py' in names
+    assert 'database/005_quality_audits.sql' in names
+    assert 'requirements.worker.txt' in names
+    assert 'playwright' in dockerfile.lower()
+    assert not any(x.startswith('frontend/') for x in names)
+
+
+def test_web_deploy_uses_web_project_and_preserves_environment(monkeypatch):
+    calls=[]
+    def fake_call(method,url,token,*,payload=None,form=None,team_id=None):
+        calls.append((method,url,payload))
+        return {'sourceID':'source-web'} if url.endswith('/sources') else {'releaseID':'release-web'}
+    monkeypatch.setattr(liara,'call',fake_call)
+    assert liara.deploy(b'zip','secret',app='davoodicar',role='web')=='release-web'
+    assert calls[0][1].endswith('/projects/davoodicar/sources')
+    assert calls[1][1].endswith('/projects/davoodicar/releases')
+    assert calls[1][2]['type']=='docker' and 'envs' not in calls[1][2]

@@ -36,7 +36,7 @@ def response_document(path):
                     cur.execute("SELECT source_code,catalog_index,page_depth,total_pages,total_listings,updated_at FROM public_crawl_checkpoints ORDER BY source_code")
                     progress = cur.fetchall()
                     cur.execute("""SELECT source_code,pages_crawled,cards_seen,details_visited,
-                        models_scanned,accepted_listings,finished_at FROM public_crawl_history
+                        models_scanned,skipped_models,error_codes,accepted_listings,finished_at FROM public_crawl_history
                         WHERE id IN (SELECT MAX(id) FROM public_crawl_history GROUP BY source_code)
                         ORDER BY source_code""")
                     recent = cur.fetchall()

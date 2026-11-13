@@ -18,7 +18,7 @@ from pydantic import BaseModel,Field
 from . import storage
 from .domain import find_vehicle,query_year,query_trim,query_condition,normalize
 
-app=FastAPI(title='DavoodiCar Offline-First',version='30.4.0')
+app=FastAPI(title='DavoodiCar Offline-First',version='30.8.0')
 DIST=Path(os.getenv('FRONTEND_DIST','/app/frontend/dist'))
 
 
@@ -212,7 +212,7 @@ def estimate(q:str=Query(min_length=2,max_length=100),
                 with db.cursor() as cur:
                     cur.execute('SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE enabled) AS enabled FROM data_sources')
                     counts=cur.fetchone()
-                    cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5')
+                    cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5 AND stale_after>NOW()')
                     priced=cur.fetchone()['n']
                     summary={'total':counts['total'],'enabled':counts['enabled'],'priced_segments':priced}
         except Exception:

@@ -182,7 +182,7 @@ def scan_model(code,car,*,start_url=None,max_pages=3,max_ads=40):
                 return rows,following,{'pages':pages,'cards':cards_seen,'details':details,'rejected':rejected,'conflicts':conflicts}
             current=following
             if not current:break
-    return rows,current,{'pages':pages,'cards':cards_seen,'details':details}
+    return rows,current,{'pages':pages,'cards':cards_seen,'details':details,'rejected':rejected,'conflicts':conflicts}
 
 def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
     """Walk the 660-model catalog across runs, persisting an explicit next URL.

@@ -75,7 +75,12 @@ def price_rows(catalog_id,year=None,trim=None,condition=None):
     if condition is not None:
         sql+=' AND p.vehicle_condition=%s';params.append(condition)
     if trim:
-        sql+=' AND v.trim_name=%s';params.append(trim)
+        # Generic Prime/Elite queries show separately priced 5/7-seat variants.
+        if trim in ('پرایم','پرستیژ','الیت'):
+            sql+=' AND (v.trim_name=%s OR v.trim_name LIKE %s)'
+            params.extend((trim,trim+' %'))
+        else:
+            sql+=' AND v.trim_name=%s';params.append(trim)
     sql+=' ORDER BY p.sample_count DESC,p.computed_at DESC LIMIT 30'
     with connection() as db:
         with db.cursor() as cur:

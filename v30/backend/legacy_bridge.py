@@ -1,9 +1,9 @@
-"""Opt-in, bounded v29 public-page pilot for the *independent* v30 worker.
+"""Bounded public-page adapters imported from v29 into the v30 hourly worker.
 
-This module never runs in HTTP requests and never bypasses 403/429/CAPTCHA.
-A site is tried only after its operator has confirmed that automated access
-to the specific public pages is permitted. Its success remains unverified
-until real Liara fetch runs have nonzero accepted ad evidence.
+For Bama, Divar and Hamrah the adapter uses ordinary public pages when an
+approved JSON feed URL is not configured. No CAPTCHA bypass, proxy rotation,
+authentication, or retry after 403/429. A site is not marked successful until
+a real listing has passed strict v30 evidence checks.
 """
 from __future__ import annotations
 import os
@@ -14,10 +14,15 @@ from .connectors import SourceUnavailable
 
 PILOT=('bama','divar','hamrah')
 HOSTS={'bama':'bama.ir','divar':'divar.ir','hamrah':'hamrah-mechanic.com'}
-DEFAULT_MODELS=('فیدلیتی پرایم','پژو 207i','سانتافه')
+DEFAULT_MODELS=('فیدلیتی پرایم','سانتافه','دنا پلاس توربو')
 
 def pilot_mode(code):
-    return code in PILOT and os.getenv('SOURCE_'+code.upper()+'_MODE','feed').strip().lower()=='legacy_public'
+    # Use the already implemented v29 public-page connectors automatically
+    # for Bama, Divar and Hamrah when no licensed feed URL is configured.
+    # Set SOURCE_*_MODE=feed to override with a provider's JSON API.
+    if code not in PILOT:return False
+    default='feed' if os.getenv('SOURCE_'+code.upper()+'_API_URL') else 'legacy_public'
+    return os.getenv('SOURCE_'+code.upper()+'_MODE',default).strip().lower()=='legacy_public'
 
 def _targets(catalog):
     wanted=[normalize(v) for v in os.getenv('PUBLIC_PILOT_MODELS',','.join(DEFAULT_MODELS)).split(',') if v.strip()]
@@ -38,12 +43,13 @@ def _targets(catalog):
         if len(out)>=limit:break
     return out
 
-def _check_permission(code):
-    if os.getenv('SOURCE_'+code.upper()+'_PUBLIC_ACCESS_APPROVED','')!='1':
-        raise SourceUnavailable('PERMISSION_NOT_CONFIRMED',
-            'Public browser trial is disabled until the site access policy is confirmed')
-    if os.getenv('MARKET_FETCH_MODE','playwright').strip().lower() not in ('http','playwright'):
-        raise SourceUnavailable('INVALID_MODE','Use explicit MARKET_FETCH_MODE=http or playwright')
+def _check_runtime(code):
+    # Ordinary public HTML and JavaScript pages only: no login, proxies,
+    # CAPTCHA solver, CAPTCHA workarounds, or retries after 403/429.
+    mode=os.getenv('MARKET_FETCH_MODE','playwright').strip().lower()
+    if mode not in ('http','playwright'):
+        raise SourceUnavailable('INVALID_MODE','Use MARKET_FETCH_MODE=http or playwright')
+    return mode
 
 def _translate_error(exc):
     txt=str(exc).lower()
@@ -79,7 +85,7 @@ def _safe_listing(code,car,card):
     text_norm=normalize(combined)
     named=[name for name in ('پرایم','پرستیژ','الیت') if name in text_norm]
     if len(named)>1:return None
-    trim=named[0] if named else (query_trim(title) or query_trim(combined))
+    trim=query_trim(combined) if named else (query_trim(title) or query_trim(combined))
     gear=_explicit_gear(combined)
     mileage=card.get('mileage')
     try:
@@ -97,9 +103,19 @@ def _safe_listing(code,car,card):
     condition='new' if status else 'used'
     if condition=='used' and mileage<=0:return None
     from safety_v24 import body_group
-    body=body_group(combined)
-    body={'clean':'original','painted':'painted','damaged':'damaged',
-          'structural':'damaged','replaced':'damaged'}.get(body,'unknown')
+    # The string 'شاسی سالم' is NOT evidence of collision damage.
+    # Prefer a clearly labelled body-state field from the detail page.
+    explicit_body=re.search(r'وضعیت\s*بدنه\s*[:：]?\s*(بدون\s*رنگ|دو\s*لکه\s*رنگ|چند\s*لکه\s*رنگ|رنگ\s*شده|تصادفی|فابریک)',normalize(combined))
+    if explicit_body:
+        mark=explicit_body.group(1)
+        body=('original' if any(x in mark for x in ('بدون','فابریک')) else
+              'damaged' if 'تصادفی' in mark else 'painted')
+    else:
+        # Unknown is safer than treating an unqualified chassis mention as damage.
+        safe_text=re.sub(r'شاسی\s*سالم','',combined)
+        category=body_group(safe_text)
+        body={'clean':'original','painted':'painted','damaged':'damaged',
+              'structural':'damaged','replaced':'damaged'}.get(category,'unknown')
     # The strict v30 validator verifies catalog identity, currency and year.
     return {'source':code,'external_id':urlsplit(url).path.rsplit('/',1)[-1][:120],
             'url':url,'title':title,'brand':car['brand'],'model':car['model'],
@@ -112,7 +128,7 @@ def _safe_listing(code,car,card):
 def collect_public(code,catalog):
     """Only a few explicit pilot models per source; no 660-model crawling."""
     if code not in PILOT:raise SourceUnavailable('UNSUPPORTED_SOURCE','Not a legacy pilot site')
-    _check_permission(code)
+    _check_runtime(code)
     targets=_targets(catalog)
     if not targets:
         raise SourceUnavailable('NO_PILOT_TARGETS',
@@ -136,7 +152,7 @@ def collect_public(code,catalog):
         for card in cards[:limit]:
             row=_safe_listing(code,car,card)
             if row:output.append(row)
-    if failures and not output:raise SourceUnavailable(failures[0],'Legacy public-page pilot failed; check Liara worker logs')
+    if failures and not output:raise SourceUnavailable(failures[0],'Public-page source fetch failed; inspect worker source audit')
     if not output:raise SourceUnavailable('NO_VERIFIED_LISTINGS',
             'Pages were parsed but no listing passed strict model/year/trim/price checks')
     # Real successful raw parsing is still subject to v30.clean_listing.

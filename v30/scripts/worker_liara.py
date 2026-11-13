@@ -16,7 +16,7 @@ STATE = {'phase': 'starting', 'bootstrapped': False, 'started_at': time.time()}
 def response_document(path):
     if path in ('/', '/api/live', '/health'):
         return 200, {'status': 'alive', 'service': 'davoodicar-worker',
-                     'version': '30.4.0', 'phase': STATE['phase'],
+                     'version': '30.6.0', 'phase': STATE['phase'],
                      'database_bootstrapped': STATE['bootstrapped'],
                      'source_access_verified': False}
     if path == '/api/worker/health':
@@ -31,6 +31,8 @@ def response_document(path):
                     enabled = cur.fetchone()['n']
                     cur.execute("SELECT scheduled_for,status,finished_at,source_ok,source_failed FROM scheduler_runs ORDER BY scheduled_for DESC LIMIT 1")
                     run = cur.fetchone()
+                    cur.execute("SELECT code,enabled,last_error_code,last_success_at FROM data_sources WHERE code IN ('bama','divar','hamrah') ORDER BY CASE code WHEN 'bama' THEN 1 WHEN 'divar' THEN 2 ELSE 3 END")
+                    public_sources = cur.fetchall()
             last = None if not run else {
                 'scheduled_for': run['scheduled_for'].isoformat() if run['scheduled_for'] else None,
                 'status': run['status'],
@@ -39,6 +41,10 @@ def response_document(path):
             }
             return 200, {'status': 'running', 'service': 'davoodicar-worker',
                          'database': 'ok', 'enabled_source_count': enabled,
+                         'public_source_pilot': [{'code':r['code'],'enabled':r['enabled'],
+                           'last_error_code':r['last_error_code'],
+                           'last_success_at':r['last_success_at'].isoformat() if r['last_success_at'] else None}
+                           for r in public_sources],
                          'last_scheduler_run': last,
                          'note': ('No feed sources are enabled; no new market prices can be collected.'
                                   if not enabled else 'Enabled sources are not proof of successful collection.')}

@@ -60,7 +60,15 @@ def query_trim(q):
     nq=normalize(q)
     # Commercial variant names outrank gearbox words in matching.
     named=[x for x in ('پرایم','پرستیژ','الیت') if re.search(r'(?<!\w)'+x+r'(?!\w)',nq)]
-    if len(named)==1:return named[0]
+    if len(named)==1:
+        family=named[0]
+        # Fidelity/Elite 5-seat vs 7-seat trims are not comparable.
+        five=bool(re.search(r'تیپ\s*1\b|پنج\s*نفره',nq))
+        seven=bool(re.search(r'تیپ\s*2\b|هفت\s*نفره',nq))
+        if five and seven:return None
+        if five:return family+' تیپ 1 پنج نفره'
+        if seven:return family+' تیپ 2 هفت نفره'
+        return family
     if len(named)>1:return None
     for raw,canonical in sorted(TRIM_TERMS.items(), key=lambda kv:-len(kv[0])):
         if re.search(r'(?<!\w)'+re.escape(normalize(raw))+r'(?!\w)',nq):
@@ -197,7 +205,8 @@ def clean_listing(payload,source,catalog_lookup,now=None):
         return None,'YEAR_TITLE_CONFLICT'
     title_trim=query_trim(title)
     trim=normalized_trim(payload.get('trim'))
-    if title_trim and trim and title_trim!=trim:return None,'TRIM_TITLE_CONFLICT'
+    if title_trim and trim and title_trim!=trim and not (title_trim in ('پرایم','پرستیژ','الیت') and trim.startswith(title_trim+' ')):
+        return None,'TRIM_TITLE_CONFLICT'
     trim=trim or title_trim
     if not trim:
         return None,'MISSING_TRIM'  # do not pool unknown variants

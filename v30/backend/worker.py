@@ -27,6 +27,17 @@ ADVISORY_LOCK_ID=7428343991011
 def _now():return datetime.now(timezone.utc)
 
 
+def _schedule_slot():
+    """A predictable 15/30/60-minute UTC instant in Tehran local time."""
+    zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
+    try: interval=int(os.getenv('CRAWLER_INTERVAL_MINUTES','60'))
+    except ValueError:interval=60
+    if interval not in (15,30,60):interval=60
+    local=_now().astimezone(zone)
+    floor_minute=(local.minute//interval)*interval
+    return local.replace(minute=floor_minute,second=0,microsecond=0).astimezone(timezone.utc)
+
+
 def _audit(cur,code,started,status,err_code=None,detail='',fetched=0,valid=0,rejected=0):
     cur.execute('''INSERT INTO fetch_runs(source_code,started_at,finished_at,status,
        error_code,error_detail,fetched_count,valid_count,rejected_count)
@@ -162,8 +173,7 @@ def _recompute(cur,run_started):
 def run_once(scheduled_for=None):
     """A single scheduler tick. Advisory lock and hour key prevent overlap."""
     if scheduled_for is None:
-        zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
-        scheduled_for=_now().astimezone(zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+        scheduled_for=_schedule_slot()
     with connection(worker=True) as db:
         with db.cursor() as cur:
             cur.execute('SELECT pg_try_advisory_lock(%s) AS locked',(ADVISORY_LOCK_ID,))
@@ -294,8 +304,7 @@ def main():
         last_tick=None
         while True:
             try:
-                local_zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
-                current=_now().astimezone(local_zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+                current=_schedule_slot()
                 if current!=last_tick:
                     last_tick=current
                     log.info('Scheduled collection: %s',run_once(current))

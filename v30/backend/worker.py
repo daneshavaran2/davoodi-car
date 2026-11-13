@@ -120,7 +120,7 @@ def _recompute(cur,run_started):
        l.vehicle_catalog_id AS catalog_id,l.model_year AS year,
        l.year_system,l.trim_name AS trim,l.vehicle_condition AS condition,
        l.mileage_km,l.transmission,l.fuel_type,l.body_condition,l.price_toman,l.observed_at,
-       l.title,l.city
+       l.title,l.city,l.published_at
        FROM car_listings l JOIN data_sources s ON s.code=l.source_code
        WHERE s.enabled AND l.validation_status='valid' AND l.price_kind='asking'
        AND l.expires_at>NOW() AND l.last_seen_at>NOW()-INTERVAL '14 days'
@@ -152,6 +152,11 @@ def _recompute(cur,run_started):
             continue
         q=quote(priced_ads)
         if not q:continue
+        # Many sources omit publication dates: do not infer that unknown
+        # publication date means a fresh underlying offer.
+        dated=sum(a.get('published_at') is not None for a in priced_ads)
+        if q['confidence']=='high' and (outliers or dated<0.75*len(priced_ads)):
+            q['confidence']='medium'
         catalog_id,year,system,trim,condition,transmission,fuel,body,band=key
         segment=hashlib.sha256(json.dumps(key,ensure_ascii=False).encode()).hexdigest()[:40]
         variant=_variant(cur,priced_ads[0])

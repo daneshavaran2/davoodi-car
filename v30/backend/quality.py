@@ -38,8 +38,13 @@ def explicit_price_matches(price,text):
     if not 50_000_000<=amount<=100_000_000_000:return False
     evidence=_norm(text)
     if 'تومان' not in evidence:return False
-    if 'قیمت توافقی' in evidence or 'تماس بگیرید' in evidence:return False
-    described=explicit_vehicle_price(evidence)
+    if any(x in evidence for x in ('قیمت توافقی','تماس بگیرید','قیمت کارخانه','قیمت نمایندگی')):
+        return False
+    # The existence of a separate Toman-denominated fee does not validate a
+    # Rial-denominated listing price. Remove Rial clauses before price matching.
+    from re import sub
+    toman_only=sub(r'(?<!\\d)\\d{8,16}\\s*ریال',' ',evidence)
+    described=explicit_vehicle_price(toman_only)
     return described is not None and abs(amount-described)<=max(1_000_000,int(amount*.01))
 
 def price_outliers(rows,*,min_rows=7):

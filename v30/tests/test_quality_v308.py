@@ -122,3 +122,13 @@ def test_source_cash_quoted_from_fresh_non_outlier_evidence():
     samples=[params for sql,params in cur.executed if 'INSERT INTO price_samples' in sql]
     assert len(samples)==6
     assert all(20000000000 not in sample for sample in samples)
+
+def test_access_denial_cooldown_does_not_spam_source():
+    from backend.quality import source_cooldown
+    now=datetime.now(timezone.utc)
+    assert source_cooldown('HTTP_429',now-timedelta(minutes=30),now)
+    assert source_cooldown('HTTP_403',now-timedelta(minutes=30),now)
+    assert source_cooldown('CAPTCHA_OR_CHALLENGE',now-timedelta(minutes=10),now)
+    assert not source_cooldown('HTTP_429',now-timedelta(hours=7),now)
+    assert not source_cooldown('PARSER_CHANGED',now-timedelta(minutes=2),now)
+    assert not source_cooldown('HTTP_403',now-timedelta(minutes=10),now,hours=0)

@@ -132,3 +132,9 @@ def test_access_denial_cooldown_does_not_spam_source():
     assert not source_cooldown('HTTP_429',now-timedelta(hours=7),now)
     assert not source_cooldown('PARSER_CHANGED',now-timedelta(minutes=2),now)
     assert not source_cooldown('HTTP_403',now-timedelta(minutes=10),now,hours=0)
+
+def test_factory_reference_and_rial_quote_are_not_cash_toman_evidence():
+    assert not explicit_price_matches(1700000000,
+        'قیمت کارخانه ۱ میلیارد و ۷۰۰ میلیون تومان')
+    assert not explicit_price_matches(1700000000,
+        'قیمت خودرو ۱۷۰۰۰۰۰۰۰۰۰ ریال، کارمزد ۱۰۰ میلیون تومان')

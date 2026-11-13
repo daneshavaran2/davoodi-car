@@ -266,8 +266,13 @@ def run_once(scheduled_for=None):
                                 details['crawl']={k:metrics.get(k,0) for k in
                                     ('pages','cards','rejected','conflicts','skipped_models')}
                                 details['errors']=page_errors
+                            # The crawler returns only fully converted rows.
+                            # The raw card count must come from its telemetry;
+                            # otherwise admin falsely reports zero fetched pages.
+                            fetched=max(len(items),int(metrics.get('cards') or 0))
                             _audit(cur,code,started,status,err,
-                                   json.dumps(details,ensure_ascii=False),len(items),len(valid),len(items)-len(valid))
+                                   json.dumps(details,ensure_ascii=False),
+                                   fetched,len(valid),max(0,fetched-len(valid)))
                             if crawl_result is not None:
                                 state=crawl_result['checkpoint']
                                 metrics=crawl_result['stats']

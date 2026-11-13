@@ -18,6 +18,7 @@ from .legacy_market.extract import listing_cards_from_html, detail_fields
 from .legacy_market.browser import source_session
 from .legacy_market import bama, divar, hamrah
 from .legacy_bridge import _safe_listing, _translate_error
+from .legacy_details import extract_public_features
 
 HOSTS={'bama':'bama.ir','divar':'divar.ir','hamrah':'hamrah-mechanic.com'}
 _DETAIL={'bama':bama._is_detail,'divar':divar._is_detail,'hamrah':hamrah._is_detail}
@@ -112,7 +113,9 @@ def _detail_enrich(card):
     # Unknown detail fields must stay unknown; never overwrite a card with a
     # conflicting value from its detail page.
     try:
-        more=detail_fields(fetch_html(card['url'],timeout=9),card['title'])
+        html=fetch_html(card['url'],timeout=9)
+        more=detail_fields(html,card['title'])
+        card['_extras']=extract_public_features(html,card['url'])
         if more.get('title') and not matches_model('',card.get('_model') or '',more['title']):
             card['detail_mismatch']=True;return card
         if card.get('price') and more.get('price'):
@@ -158,7 +161,11 @@ def scan_model(code,car,*,start_url=None,max_pages=3,max_ads=40):
                 if details<detail_limit:
                     _detail_enrich(card);details+=1
                 converted=_safe_listing(code,car,card)
-                if converted:rows.append(converted)
+                if converted:
+                    converted['extra_fields']=card.get('_extras') or {}
+                    if converted['extra_fields'].get('city'):
+                        converted['city']=converted['extra_fields']['city']
+                    rows.append(converted)
                 if len(rows)>=max_ads:break
             following=next_page_link(raw,current,code,seen_pages)
             if len(rows)>=max_ads:

@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import './style.css';
+import VoiceInput from './VoiceInput.jsx';
 
 const fa = n => new Intl.NumberFormat('fa-IR',{maximumFractionDigits:1}).format(n);
 const money = value => {
@@ -94,12 +95,15 @@ function App(){
    jsonFetch('/api/v1/vehicles/search?q='+encodeURIComponent(q)).then(data=>{if(seq.current===current)setSuggestions(data.suggestions||[])}).catch(()=>{})
   },230);return()=>clearTimeout(h);
  },[q]);
- async function search(chosen=null){
-  const id=chosen?.id||selection?.id;
-  if(!q.trim())return;
+ async function searchText(text,selectedId=null){
+  const term=String(text||'').trim();if(term.length<2)return;
   setBusy(true);setError('');setResult(null);setSuggestions([]);
-  const url='/api/v1/prices/estimate?q='+encodeURIComponent(q)+(id?'&vehicle_id='+encodeURIComponent(id):'');
+  const url='/api/v1/prices/estimate?q='+encodeURIComponent(term)+(selectedId?'&vehicle_id='+encodeURIComponent(selectedId):'');
   try{setResult(await jsonFetch(url))}catch(e){setError(e.message)}finally{setBusy(false)}
+ }
+ function fromVoice(text){setQ(text);setSelection(null);setSuggestions([]);searchText(text)}
+ async function search(chosen=null){
+  return searchText(q,chosen?.id||selection?.id);
  }
  const choose=s=>{setQ(s.name);setSelection(s);setSuggestions([]);searchWith(s)};
  async function searchWith(s){
@@ -110,9 +114,10 @@ function App(){
    <header><a className="brand" href="/" aria-label="داودی‌کار"><span className="brand-mark"><Icon name="car" size={28}/></span><span>داودی<span className="gold">کار</span><small>پیدا کردن قیمت، به همین سادگی</small></span></a><a className="header-anchor" href="#search">جست‌وجوی قیمت خودرو <Icon name="arrow" size={16}/></a></header>
    <main><section className="hero" id="search"><span className="eyebrow"><Icon name="shield" size={16}/> قیمت از آگهی‌های قابل پیگیری</span>
      <h1>قیمت حدودی ماشینت رو <em>یک‌جا</em> پیدا کن.</h1>
-     <p>فقط نام خودرو را بنویس. داودی‌کار بازه قیمت‌های ذخیره‌شده از آگهی‌های مشابه را نشان می‌دهد؛ بدون جست‌وجو در چند سایت.</p>
+     <p>نام خودرو را تایپ کنید یا با میکروفن بگویید. قیمت‌های تأییدشده از دیتابیس نمایش داده می‌شوند؛ اگر منبع فعالی نباشد، علت مشخص می‌شود.</p>
      <form onSubmit={e=>{e.preventDefault();search()}} className="search-box" autoComplete="off">
        <div className="search-main"><Icon name="search" size={25}/><input value={q} onChange={e=>{setQ(e.target.value);setSelection(null)}} placeholder="مثلاً سانتافه ۲۰۱۷ یا فیدلیتی پرایم" aria-label="نام خودرو" maxLength={100} required/>
+         <VoiceInput disabled={busy} onTranscript={fromVoice}/>
          <button disabled={busy||q.trim().length<2} type="submit">{busy?'در حال دریافت…':'نمایش قیمت'}<Icon name="arrow" size={20}/></button></div>
        {suggestions.length>0&&<div className="suggestions" role="listbox">{suggestions.slice(0,6).map(s=><button type="button" role="option" aria-selected="false" key={s.id} onClick={()=>choose(s)}>{s.name}</button>)}</div>}
      </form>
@@ -122,7 +127,7 @@ function App(){
     {error&&<div className="notice error"><strong>جست‌وجو انجام نشد.</strong> {error}</div>}
     {result&&<><div className="results-title"><h2>{result.vehicle||'نتیجه جست‌وجو'}</h2><p>{result.message}</p></div>
       {result.status==='needs_selection'&&<div className="choice panel"><h3>کدام خودرو را می‌خواهید؟</h3><div>{(result.options||[]).map(x=><button key={x.id} onClick={()=>choose(x)}>{x.name}</button>)}</div></div>}
-      {result.status==='no_data'&&<div className="no-data panel"><Icon name="clock" size={30}/><h3>فعلاً داده معتبر کافی نداریم</h3><p>{result.message}</p><small>ثبت درخواست بررسی به معنی دریافت موفق قیمت نیست. نتیجه پس از به‌روزرسانی مستقل آماده می‌شود.</small></div>}
+      {result.status==='no_data'&&<div className="no-data panel"><Icon name="clock" size={30}/><h3>{result.reason==='sources_inactive'?'هیچ منبع قیمت فعالی نداریم':result.reason==='no_verified_prices'?'هیچ قیمت تأییدشده‌ای ذخیره نشده':'فعلاً آگهی مشابه کافی نداریم'}</h3><p>{result.message}</p>{result.source_summary&&<p className="source-summary">{fa(result.source_summary.enabled)} منبع فعال از {fa(result.source_summary.total)} منبع · {fa(result.source_summary.priced_segments)} گروه قیمت ذخیره‌شده</p>}<small>ثبت درخواست بررسی به معنی دریافت قیمت نیست؛ Worker به فید/API مجاز فعال نیاز دارد.</small></div>}
       {result.status==='ok'&&<><div className="cards">{result.groups.map(g=><PriceCard key={g.segment_key} g={g}/>)}</div><p className="disclaimer"><Icon name="shield" size={16}/> این قیمت‌ها از آگهی فروشندگان استخراج می‌شوند؛ قیمت قطعی معامله نیستند.</p></>}
     </>}
    </section>

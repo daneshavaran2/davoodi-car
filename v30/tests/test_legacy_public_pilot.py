@@ -80,3 +80,31 @@ def test_mock_source_fills_only_real_pilot_rows(monkeypatch):
     with patch.object(bama,'search',return_value=[valid_card()]):
         rows=bridge.collect_public('bama',CARS)
     assert len(rows)==1 and rows[0]['model']=='فیدلیتی پرایم'
+
+def test_bama_public_page_navigation_to_model_and_detail(monkeypatch):
+    """Replays observed public page structure; does not contact the real site."""
+    from backend.legacy_market import bama
+    home='<html><a href="/car/fidelity">خرید و فروش فیدلیتی</a></html>'
+    family='<html><a href="/car/fidelity-prime">خرید و فروش فیدلیتی پرایم</a></html>'
+    model='''<html><article><a href="/car/detail-abc-fidelity-prime-1403">
+     فیدلیتی، پرایم تیپ 1 پنج نفره 1403</a><p>کارکرد 45,000 کیلومتر</p>
+     <span class="asking-price">6,800,000,000 تومان</span></article></html>'''
+    detail='''<html><main><h1>فیدلیتی، پرایم</h1>
+     <div>1403 کارکرد 45,000 کیلومتر</div>
+     <div>قیمت فروش 6,800,000,000 تومان</div>
+     <div>گیربکس اتوماتیک</div><div>وضعیت بدنه بدون رنگ</div>
+     </main></html>'''
+    routes={'https://bama.ir/car':home,'https://bama.ir/car/fidelity':family,
+            'https://bama.ir/car/fidelity-prime':model,
+            'https://bama.ir/car/detail-abc-fidelity-prime-1403':detail}
+    def local_page(url,timeout=8):
+        assert url in routes, url
+        return routes[url]
+    monkeypatch.setattr(bama,'fetch_html',local_page)
+    cards=bama.search({'brand':'بهمن','model':'فیدلیتی پرایم'},limit=5)
+    assert len(cards)==1
+    converted=bridge._safe_listing('bama',CARS[0],cards[0])
+    assert converted is not None
+    assert converted['model_year']==1403
+    assert converted['price_toman']==6800000000
+    assert converted['transmission']=='automatic'

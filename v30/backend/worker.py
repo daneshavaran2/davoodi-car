@@ -77,6 +77,17 @@ def _save_ad(cur,x):
          x['observed_at'],x['observed_at'],x['observed_at']+timedelta(days=14),
          hashlib.sha256((normalize(x['title'])+str(x['price_toman'])+str(x['mileage_km'])+x['city']).encode()).hexdigest(),
          x['title'],x['trim']))
+    # Optional public details are kept independently; they never override
+    # the numeric facts that passed clean_listing validation.
+    if x.get('extra_fields'):
+        cur.execute('''INSERT INTO public_listing_extras
+            (source_code,external_id,url,public_fields,observed_at)
+            VALUES(%s,%s,%s,%s::jsonb,NOW())
+            ON CONFLICT(source_code,external_id) DO UPDATE SET
+              url=EXCLUDED.url,public_fields=EXCLUDED.public_fields,
+              observed_at=NOW()''',
+            (x['source'],x['external_id'],x['url'],
+             json.dumps(x['extra_fields'],ensure_ascii=False)))
 
 
 def _recompute(cur,run_started):

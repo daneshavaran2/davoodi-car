@@ -8,6 +8,7 @@ guessing of page numbers, API endpoints, car prices, or missing ad attributes.
 from __future__ import annotations
 import os
 import re
+import time
 from urllib.parse import quote, urlencode, urljoin, urlsplit, parse_qs
 from bs4 import BeautifulSoup
 
@@ -190,7 +191,9 @@ def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
     depth=max(0,int(checkpoint.get('page_depth') or 0))
     current_id=checkpoint.get('vehicle_catalog_id')
     next_url=checkpoint.get('next_url')
-    output=[];stats={'pages':0,'cards':0,'details':0,'models':0,'priority_models':0}
+    output=[];stats={'pages':0,'cards':0,'details':0,'models':0,'priority_models':0,'skipped_models':0,'errors':{}}
+    deadline=time.monotonic()+_positive('PUBLIC_CRAWL_MAX_RUNTIME_SECONDS',150,1200)
+    blocking=('HTTP_403','HTTP_429','CAPTCHA_OR_CHALLENGE')
     scanned_ids=set()
 
     # A requested model is useful immediately; do not wait for a full
@@ -199,11 +202,18 @@ def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
     for pid in tuple(priority_ids)[:1]:
         if pid not in by_id:continue
         vehicle=by_id[pid]
-        ads,_,metric=scan_model(code,vehicle,max_pages=budget,max_ads=max_ads)
+        try:
+            ads,_,metric=scan_model(code,vehicle,max_pages=budget,max_ads=max_ads)
+        except SourceUnavailable as exc:
+            if exc.code in blocking:raise
+            stats['skipped_models']+=1
+            stats['errors'][exc.code]=stats['errors'].get(exc.code,0)+1
+            continue
         output.extend(ads);scanned_ids.add(pid)
         stats['priority_models']+=1
         for key in ('pages','cards','details'):stats[key]+=metric[key]
     for _ in range(model_limit):
+        if time.monotonic()>deadline:break
         car=cars[index]
         if current_id!=car['catalog_id']:
             next_url=None;depth=0;current_id=car['catalog_id']
@@ -211,7 +221,17 @@ def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
             # A priority fetch must not count as a repeated background fetch.
             index=(index+1)%len(cars);next_url=None;current_id=None;depth=0
             continue
-        ads,resume,metric=scan_model(code,car,start_url=next_url,max_pages=budget,max_ads=max_ads)
+        try:
+            ads,resume,metric=scan_model(code,car,start_url=next_url,max_pages=budget,max_ads=max_ads)
+        except SourceUnavailable as exc:
+            if exc.code in blocking:raise
+            # An unavailable catalogue model must not freeze progress for all
+            # 660 models. Skip this model but retain the per-run error metric.
+            stats['skipped_models']+=1
+            stats['errors'][exc.code]=stats['errors'].get(exc.code,0)+1
+            next_url=None;current_id=None;depth=0
+            index=(index+1)%len(cars)
+            continue
         output.extend(ads)
         stats['models']+=1
         for key in ('pages','cards','details'):stats[key]+=metric[key]

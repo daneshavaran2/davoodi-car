@@ -222,7 +222,13 @@ def run_once(scheduled_for=None):
                         valid=[]; reasons=defaultdict(int)
                         for raw in items:
                             x,reason=clean_listing(raw,code,mapping,now=started)
-                            if x:valid.append(x)
+                            if x:
+                                # clean_listing returns only the strict canonical fields;
+                                # keep the independently sourced public extras after validation.
+                                extras=raw.get('extra_fields') if isinstance(raw,dict) else None
+                                if isinstance(extras,dict) and extras:
+                                    x['extra_fields']=extras
+                                valid.append(x)
                             else:reasons[reason]+=1
                         # Network and parser fully succeeded before data is written.
                         with db.transaction():

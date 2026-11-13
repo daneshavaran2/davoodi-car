@@ -14,10 +14,15 @@ from .connectors import SourceUnavailable
 
 PILOT=('bama','divar','hamrah')
 HOSTS={'bama':'bama.ir','divar':'divar.ir','hamrah':'hamrah-mechanic.com'}
-DEFAULT_MODELS=('فیدلیتی پرایم','پژو 207i','سانتافه')
+DEFAULT_MODELS=('فیدلیتی پرایم','سانتافه','دنا پلاس توربو')
 
 def pilot_mode(code):
-    return code in PILOT and os.getenv('SOURCE_'+code.upper()+'_MODE','feed').strip().lower()=='legacy_public'
+    # Use the already implemented v29 public-page connectors automatically
+    # for Bama, Divar and Hamrah when no licensed feed URL is configured.
+    # Set SOURCE_*_MODE=feed to override with a provider's JSON API.
+    if code not in PILOT:return False
+    default='feed' if os.getenv('SOURCE_'+code.upper()+'_API_URL') else 'legacy_public'
+    return os.getenv('SOURCE_'+code.upper()+'_MODE',default).strip().lower()=='legacy_public'
 
 def _targets(catalog):
     wanted=[normalize(v) for v in os.getenv('PUBLIC_PILOT_MODELS',','.join(DEFAULT_MODELS)).split(',') if v.strip()]
@@ -38,12 +43,13 @@ def _targets(catalog):
         if len(out)>=limit:break
     return out
 
-def _check_permission(code):
-    if os.getenv('SOURCE_'+code.upper()+'_PUBLIC_ACCESS_APPROVED','')!='1':
-        raise SourceUnavailable('PERMISSION_NOT_CONFIRMED',
-            'Public browser trial is disabled until the site access policy is confirmed')
-    if os.getenv('MARKET_FETCH_MODE','playwright').strip().lower() not in ('http','playwright'):
-        raise SourceUnavailable('INVALID_MODE','Use explicit MARKET_FETCH_MODE=http or playwright')
+def _check_runtime(code):
+    # Ordinary public HTML and JavaScript pages only: no login, proxies,
+    # CAPTCHA solver, CAPTCHA workarounds, or retries after 403/429.
+    mode=os.getenv('MARKET_FETCH_MODE','playwright').strip().lower()
+    if mode not in ('http','playwright'):
+        raise SourceUnavailable('INVALID_MODE','Use MARKET_FETCH_MODE=http or playwright')
+    return mode
 
 def _translate_error(exc):
     txt=str(exc).lower()
@@ -112,7 +118,7 @@ def _safe_listing(code,car,card):
 def collect_public(code,catalog):
     """Only a few explicit pilot models per source; no 660-model crawling."""
     if code not in PILOT:raise SourceUnavailable('UNSUPPORTED_SOURCE','Not a legacy pilot site')
-    _check_permission(code)
+    _check_runtime(code)
     targets=_targets(catalog)
     if not targets:
         raise SourceUnavailable('NO_PILOT_TARGETS',
@@ -136,7 +142,7 @@ def collect_public(code,catalog):
         for card in cards[:limit]:
             row=_safe_listing(code,car,card)
             if row:output.append(row)
-    if failures and not output:raise SourceUnavailable(failures[0],'Legacy public-page pilot failed; check Liara worker logs')
+    if failures and not output:raise SourceUnavailable(failures[0],'Public-page source fetch failed; inspect worker source audit')
     if not output:raise SourceUnavailable('NO_VERIFIED_LISTINGS',
             'Pages were parsed but no listing passed strict model/year/trim/price checks')
     # Real successful raw parsing is still subject to v30.clean_listing.

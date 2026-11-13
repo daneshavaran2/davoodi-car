@@ -70,9 +70,16 @@ def _safe_listing(code,car,card):
     title=str(card.get('title') or '').strip()[:200]
     content=str(card.get('content') or '')[:1600]
     combined=title+' '+content
+    # Reject naked price-widget numbers without a verified TOMAN denomination.
+    # The v29 widget parser can return a bare figure with unknown currency.
+    if 'تومان' not in normalize(combined):return None
     price=card.get('price')
     year=card.get('year') or query_year(title)
-    trim=query_trim(title) or query_trim(combined)
+    # Named commercial variants outrank generic gearbox words (Prime vs AT).
+    text_norm=normalize(combined)
+    named=[name for name in ('پرایم','پرستیژ','الیت') if name in text_norm]
+    if len(named)>1:return None
+    trim=named[0] if named else (query_trim(title) or query_trim(combined))
     gear=_explicit_gear(combined)
     mileage=card.get('mileage')
     try:

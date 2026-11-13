@@ -149,8 +149,8 @@ def estimate(q:str=Query(min_length=2,max_length=100),
     groups=[]
     for r in rows:
         age=(now-r['computed_at']).total_seconds() if r['computed_at'] else 999999999
-        # Old prices cannot silently masquerade as current prices.
-        if age>86400:continue
+        # storage.price_rows() already filters by each row's stale_after;
+        # do not apply a second incompatible hardcoded 24h cutoff.
         status='fresh' if age<=7200 else 'stale'
         groups.append({
           'segment_key':r['segment_key'],

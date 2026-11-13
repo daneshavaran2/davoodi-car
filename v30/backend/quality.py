@@ -76,3 +76,13 @@ def publication_age(value,now=None):
     if dt>now+timedelta(hours=1):return 'future'
     if dt<now-timedelta(days=14):return 'stale'
     return 'fresh'
+
+def source_cooldown(error_code,last_attempt,now=None,hours=6):
+    """Avoid re-querying a source for hours after explicit access rejection."""
+    if error_code not in ('HTTP_403','HTTP_429','CAPTCHA_OR_CHALLENGE'):return False
+    if not isinstance(last_attempt,datetime) or last_attempt.tzinfo is None:return False
+    try:window=max(0,min(24,int(hours)))
+    except (TypeError,ValueError):window=6
+    if not window:return False
+    now=now or datetime.now(timezone.utc)
+    return last_attempt<=now and now-last_attempt<timedelta(hours=window)

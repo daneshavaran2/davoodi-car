@@ -17,7 +17,7 @@ from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
 from . import nemuda
-from .quality import price_outliers
+from .quality import price_outliers,source_cooldown
 from .legacy_bridge import pilot_mode
 from .legacy_crawler import crawl_catalog
 
@@ -217,7 +217,7 @@ def run_once(scheduled_for=None):
                 cur.execute('''SELECT catalog_id,brand,model,display_name FROM vehicle_models''')
                 catalog=cur.fetchall()
                 mapping={(normalize(x['brand']),normalize(x['model'])):x['catalog_id'] for x in catalog}
-                cur.execute('SELECT code,enabled FROM data_sources ORDER BY code')
+                cur.execute('SELECT code,enabled,last_error_code,last_attempt_at FROM data_sources ORDER BY code')
                 sources=cur.fetchall()
                 cur.execute('''SELECT DISTINCT vehicle_catalog_id FROM refresh_requests
                     WHERE status='pending' AND vehicle_catalog_id IS NOT NULL
@@ -233,6 +233,17 @@ def run_once(scheduled_for=None):
                           error_code,error_detail) VALUES(%s,%s,NOW(),'skipped',%s,%s)''',
                           (code,started,'TERMS_NOT_PERMITTED','Source disabled by administrator'))
                         db.commit();continue
+                    # Respect a source's explicit 403/429/CAPTCHA response instead
+                    # of attempting the same blocked request every 30 minutes.
+                    if pilot_mode(code) and source_cooldown(
+                        source.get('last_error_code'),source.get('last_attempt_at'),
+                        started,os.getenv('PUBLIC_CRAWL_COOLDOWN_HOURS','6')):
+                        cur.execute('''INSERT INTO fetch_runs(
+                          source_code,started_at,finished_at,status,error_code,error_detail)
+                          VALUES(%s,%s,NOW(),'skipped','SOURCE_COOLDOWN',
+                                 'Waiting after provider access denial')''',(code,started))
+                        db.commit()
+                        continue
                     try:
                         # Licensed source adapters may serve all catalog models in one feed.
                         crawl_result=None

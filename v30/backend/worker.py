@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
+from . import nemuda
 
 log=logging.getLogger('davoodicar.worker')
 ADVISORY_LOCK_ID=7428343991011
@@ -202,6 +203,16 @@ def run_once(scheduled_for=None):
                         db.rollback();failed+=1
                         log.exception('Source %s failed',code)
                         _audit(cur,code,started,'failed','PARSER_CHANGED',str(exc)[:230]);db.commit()
+                # External aggregate prices remain in a separate table.
+                # A failed Nemuda request never clears earlier successful rows.
+                with db.cursor() as catalog_cur:
+                    catalog_cur.execute('SELECT catalog_id,brand,model,display_name FROM vehicle_models')
+                    nemuda_cars=catalog_cur.fetchall()
+                    catalog_cur.execute('SELECT vehicle_catalog_id,alias_text FROM vehicle_aliases')
+                    nemuda_aliases=catalog_cur.fetchall()
+                aggregate_status=nemuda.refresh(db,nemuda_cars,nemuda_aliases)
+                if aggregate_status['status']=='ok':good+=1
+                elif aggregate_status['status'] in ('error','no_matches'):failed+=1
                 with db.transaction():
                     n=_recompute(cur,run_started) if good else 0
                     cur.execute('UPDATE scheduler_runs SET finished_at=NOW(),status=%s,source_ok=%s,source_failed=%s,error_summary=%s WHERE scheduled_for=%s',
@@ -251,3 +262,4 @@ def main():
     else:print(run_once())
 
 if __name__=='__main__':main()
+

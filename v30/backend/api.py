@@ -51,7 +51,7 @@ def iso(v):return v.astimezone(timezone.utc).isoformat() if isinstance(v,datetim
 @app.get('/api/live')
 def live():
     # Liveness of the HTTP process, independent of database readiness.
-    return {'status':'alive','version':'30.4.0','readiness':'/api/v1/health'}
+    return {'status':'alive','version':app.version,'readiness':'/api/v1/health'}
 
 
 @app.get('/api/v1/health')
@@ -61,7 +61,7 @@ def health():
     error_code = 'DATABASE_URL_MISSING' if not os.getenv('DATABASE_URL', '').strip() else 'DATABASE_UNAVAILABLE'
     if error_code == 'DATABASE_URL_MISSING':
         return JSONResponse(status_code=503,content={'status':'unavailable',
-            'version':'30.4.0','database':'unavailable','error_code':error_code})
+            'version':app.version,'database':'unavailable','error_code':error_code})
     try:
         with storage.connection() as db:
             with db.cursor() as cur:
@@ -72,12 +72,12 @@ def health():
                     cur.execute('SELECT COUNT(*) AS n FROM vehicle_models')
                     error_code='CATALOG_NOT_READY' if cur.fetchone()['n'] < 660 else None
         if error_code is None:
-            return {'status':'ok','version':'30.4.0','database':'ok',
+            return {'status':'ok','version':app.version,'database':'ok',
                     'search_mode':'postgresql_only','scheduler':'independent_worker'}
     except Exception:
         error_code='DATABASE_UNAVAILABLE'
     return JSONResponse(status_code=503,content={'status':'unavailable',
-        'version':'30.4.0','database':'unavailable','error_code':error_code})
+        'version':app.version,'database':'unavailable','error_code':error_code})
 
 
 @app.middleware('http')

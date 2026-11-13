@@ -1,9 +1,9 @@
-"""Opt-in, bounded v29 public-page pilot for the *independent* v30 worker.
+"""Bounded public-page adapters imported from v29 into the v30 hourly worker.
 
-This module never runs in HTTP requests and never bypasses 403/429/CAPTCHA.
-A site is tried only after its operator has confirmed that automated access
-to the specific public pages is permitted. Its success remains unverified
-until real Liara fetch runs have nonzero accepted ad evidence.
+For Bama, Divar and Hamrah the adapter uses ordinary public pages when an
+approved JSON feed URL is not configured. No CAPTCHA bypass, proxy rotation,
+authentication, or retry after 403/429. A site is not marked successful until
+a real listing has passed strict v30 evidence checks.
 """
 from __future__ import annotations
 import os

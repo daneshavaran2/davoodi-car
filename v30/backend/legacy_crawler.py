@@ -76,7 +76,7 @@ def next_page_link(raw,page_url,code,seen=()):
 def _seed_bama(car):
     base='https://bama.ir/car'
     raw=fetch_html(base,timeout=10)
-    links=links_from_html(raw,base)
+    links=[(u,t) for u,t in links_from_html(raw,base) if allowed_page(u,'bama')]
     brand=car['brand'];model=car['model']
     seed=(bama._best_link(links,brand,model) or
           bama._best_link(links,brand) or bama._best_link(links,'',model))

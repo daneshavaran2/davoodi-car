@@ -169,8 +169,29 @@ def estimate(q:str=Query(min_length=2,max_length=100),
         # does NOT block the user while scraping and has no invented price.
         try:storage.request_refresh(car['catalog_id'],y,tr)
         except Exception:pass
+        # No external website fetch; this diagnostic is one small PostgreSQL read.
+        # A catalog of 660 vehicles alone never creates real asking prices.
+        summary=None
+        try:
+            with storage.connection() as db:
+                with db.cursor() as cur:
+                    cur.execute('SELECT COUNT(*) AS total,COUNT(*) FILTER (WHERE enabled) AS enabled FROM data_sources')
+                    counts=cur.fetchone()
+                    cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5')
+                    priced=cur.fetchone()['n']
+                    summary={'total':counts['total'],'enabled':counts['enabled'],'priced_segments':priced}
+        except Exception:
+            pass
+        reason=('sources_inactive' if summary and not summary['enabled'] else
+                'no_verified_prices' if summary and not summary['priced_segments'] else
+                'insufficient_sample')
+        message=('هیچ منبع قیمت فعالی تنظیم نشده است. کاتالوگ خودروها قیمت روز ندارد؛ مدیر باید فید یا API مجاز را به Worker متصل کند.'
+                 if reason=='sources_inactive' else
+                 'هنوز هیچ بازه قیمتی از آگهی‌های معتبر ذخیره نشده است. وضعیت Worker و خطاهای منابع را در پنل مدیریت بررسی کنید.'
+                 if reason=='no_verified_prices' else
+                 'برای این مدل یا تیپ، دست‌کم ۵ آگهی هم‌گروه معتبر و به‌روز وجود ندارد. درخواست بررسی ثبت شد.')
         return {'status':'no_data','vehicle':car['display_name'],
-                'message':'هنوز آگهی معتبر کافی برای این خودرو نداریم. درخواست بررسی ثبت شد.',
+                'message':message,'reason':reason,'source_summary':summary,
                 'groups':[], 'duration_ms':round((time.monotonic()-t0)*1000)}
     return {'status':'ok','vehicle':car['display_name'],
             'groups':groups[:12],'message':'قیمت‌های پیشنهادی آگهی‌ها؛ نه قیمت قطعی معامله.',

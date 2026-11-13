@@ -31,4 +31,14 @@ CREATE TABLE IF NOT EXISTS public_crawl_history (
 );
 CREATE INDEX IF NOT EXISTS idx_public_crawl_history_time
   ON public_crawl_history(source_code,finished_at DESC);
+CREATE TABLE IF NOT EXISTS public_listing_extras (
+  source_code TEXT NOT NULL REFERENCES data_sources(code),
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  public_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (source_code,external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_public_listing_extras_observed
+  ON public_listing_extras(source_code,observed_at DESC);
 COMMIT;

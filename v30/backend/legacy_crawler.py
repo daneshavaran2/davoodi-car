@@ -130,7 +130,16 @@ def _detail_enrich(card):
         for key in ('price','year','mileage','published_at'):
             if more.get(key) is not None and card.get(key) is None:card[key]=more[key]
         if more.get('title'):card['title']=more['title']
-        if more.get('content'):card['content']=(card.get('content') or '')+' '+more['content'][:2000]
+        # Preserve local cash-price evidence from ONE page component; appending
+        # near-identical prices from card + detail can create false ambiguity.
+        from .quality import explicit_price_matches
+        card_text=card.get('content') or ''
+        detail_text=more.get('content') or ''
+        if explicit_price_matches(card.get('price'),card_text):
+            card['_price_evidence_text']=card_text
+        elif explicit_price_matches(card.get('price'),detail_text):
+            card['_price_evidence_text']=detail_text
+        if detail_text:card['content']=card_text+' '+detail_text[:2000]
     except RuntimeError as exc:
         error=_translate_error(exc)
         if error in ('HTTP_403','HTTP_429','CAPTCHA_OR_CHALLENGE'):

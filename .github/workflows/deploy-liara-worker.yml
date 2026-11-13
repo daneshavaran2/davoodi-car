@@ -1,4 +1,4 @@
-name: DavoodiCar v30.7 Worker QA + Liara API
+name: DavoodiCar v30.8 Web + Worker QA and Liara API
 on:
   push:
     branches: [main]
@@ -9,6 +9,8 @@ on:
       - 'v30/tests/**'
       - 'v30/requirements*.txt'
       - 'v30/Dockerfile.worker'
+      - 'v30/Dockerfile'
+      - 'v30/frontend/**'
       - '.github/workflows/deploy-liara-worker.yml'
   workflow_dispatch:
 
@@ -33,10 +35,14 @@ jobs:
         run: cd v30 && python -m compileall -q backend scripts safety_v24.py
       - name: Verify all offline tests
         run: cd v30 && python -m pytest -q
-      - name: Verify Liara archive creation without credentials
-        run: python v30/scripts/deploy_liara_api.py --dry-run
-      - name: Build production Worker Docker image
-        run: docker build -f v30/Dockerfile.worker -t davoodicar-worker:v30.7 v30
+      - name: Verify both Liara archives without credentials
+        run: |
+          python v30/scripts/deploy_liara_api.py --dry-run --role web
+          python v30/scripts/deploy_liara_api.py --dry-run --role worker
+      - name: Build production Web image
+        run: docker build -f v30/Dockerfile -t davoodicar-web:v30.8 v30
+      - name: Build production Worker image
+        run: docker build -f v30/Dockerfile.worker -t davoodicar-worker:v30.8 v30
 
   deploy:
     needs: test
@@ -54,25 +60,45 @@ jobs:
             echo "::error::LIARA_API_TOKEN missing. Add it as a GitHub Actions secret; do not paste it into source code."
             exit 1
           fi
-      - name: Upload verified Worker bundle and create Liara Docker release via REST API
-        run: python v30/scripts/deploy_liara_api.py --app davoodicar-worker
-      - name: Verify newly deployed Worker version on Liara
+      - name: Upload verified Web package and create Liara release
+        run: python v30/scripts/deploy_liara_api.py --app davoodicar --role web
+      - name: Verify Web version and PostgreSQL readiness
         run: |
           python - <<'PY'
-          import json, time
+          import json,time
           from urllib.request import urlopen
-          url='https://davoodicar-worker.liara.run/api/live'
-          for attempt in range(15):
+          url='https://davoodicar.liara.run/api/v1/health'
+          for _ in range(15):
               try:
                   with urlopen(url,timeout=12) as response:
                       j=json.load(response)
-                  if j.get('version')=='30.7.0' and j.get('database_bootstrapped'):
-                      print('LIARA_WORKER_30_7_VERIFIED')
+                  if j.get('version')=='30.8.0' and j.get('database')=='ok':
+                      print('LIARA_WEB_30_8_VERIFIED')
                       break
-                  print('Waiting for Worker release to become ready')
               except Exception:
-                  print('Worker release not ready yet')
+                  pass
               time.sleep(10)
           else:
-              raise SystemExit('Worker 30.7 readiness not confirmed; inspect Liara release logs')
+              raise SystemExit('Web 30.8 readiness not verified; STOP before Worker deployment')
+          PY
+      - name: Upload verified Worker package and create Liara release
+        run: python v30/scripts/deploy_liara_api.py --app davoodicar-worker --role worker
+      - name: Verify Worker version and PostgreSQL readiness
+        run: |
+          python - <<'PY'
+          import json,time
+          from urllib.request import urlopen
+          url='https://davoodicar-worker.liara.run/api/live'
+          for _ in range(15):
+              try:
+                  with urlopen(url,timeout=12) as response:
+                      j=json.load(response)
+                  if j.get('version')=='30.8.0' and j.get('database_bootstrapped'):
+                      print('LIARA_WORKER_30_8_VERIFIED')
+                      break
+              except Exception:
+                  pass
+              time.sleep(10)
+          else:
+              raise SystemExit('Worker 30.8 readiness not verified; inspect Liara logs')
           PY

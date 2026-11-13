@@ -90,7 +90,7 @@ def test_bama_public_page_navigation_to_model_and_detail(monkeypatch):
      فیدلیتی، پرایم تیپ 1 پنج نفره 1403</a><p>کارکرد 45,000 کیلومتر</p>
      <span class="asking-price">6,800,000,000 تومان</span></article></html>'''
     detail='''<html><main><h1>فیدلیتی، پرایم</h1>
-     <div>1403 کارکرد 45,000 کیلومتر</div>
+     <div>تیپ 1 پنج نفره 1403 کارکرد 45,000 کیلومتر</div>
      <div>قیمت فروش 6,800,000,000 تومان</div>
      <div>گیربکس اتوماتیک</div><div>وضعیت بدنه بدون رنگ</div>
      </main></html>'''
@@ -108,3 +108,23 @@ def test_bama_public_page_navigation_to_model_and_detail(monkeypatch):
     assert converted['model_year']==1403
     assert converted['price_toman']==6800000000
     assert converted['transmission']=='automatic'
+    assert converted['trim']=='پرایم تیپ 1 پنج نفره'
+
+def test_fidelity_seat_variant_not_blended():
+    from backend.domain import query_trim,clean_listing,normalize
+    assert query_trim('فیدلیتی پرایم تیپ 1 پنج نفره اتومات')=='پرایم تیپ 1 پنج نفره'
+    assert query_trim('فیدلیتی پرایم تیپ 2 هفت نفره اتومات')=='پرایم تیپ 2 هفت نفره'
+    assert query_trim('فیدلیتی پرایم')=='پرایم'
+    first=valid_card()
+    first['content']+=' تیپ 1 پنج نفره'
+    row=bridge._safe_listing('bama',CARS[0],first)
+    assert row['trim']=='پرایم تیپ 1 پنج نفره'
+    cars={(normalize(v['brand']),normalize(v['model'])):v['catalog_id'] for v in CARS}
+    parsed,reason=clean_listing(row,'bama',cars,now=datetime.now(timezone.utc))
+    assert reason is None and parsed['trim']=='پرایم تیپ 1 پنج نفره'
+
+def test_body_field_without_paint_is_not_damaged():
+    card=valid_card()
+    card['content']+=' وضعیت بدنه بدون رنگ شاسی سالم'
+    row=bridge._safe_listing('bama',CARS[0],card)
+    assert row['body_condition']=='original'

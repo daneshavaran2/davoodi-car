@@ -17,7 +17,8 @@ from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
 from . import nemuda
-from .legacy_bridge import pilot_mode, collect_public
+from .legacy_bridge import pilot_mode
+from .legacy_crawler import crawl_catalog
 
 log=logging.getLogger('davoodicar.worker')
 ADVISORY_LOCK_ID=7428343991011
@@ -171,6 +172,10 @@ def run_once(scheduled_for=None):
                 mapping={(normalize(x['brand']),normalize(x['model'])):x['catalog_id'] for x in catalog}
                 cur.execute('SELECT code,enabled FROM data_sources ORDER BY code')
                 sources=cur.fetchall()
+                cur.execute('''SELECT DISTINCT vehicle_catalog_id FROM refresh_requests
+                    WHERE status='pending' AND vehicle_catalog_id IS NOT NULL
+                    ORDER BY vehicle_catalog_id LIMIT 2''')
+                priority_ids=[x['vehicle_catalog_id'] for x in cur.fetchall()]
                 good=0;failed=0
                 run_started=_now()
                 for source in sources:
@@ -183,8 +188,16 @@ def run_once(scheduled_for=None):
                         db.commit();continue
                     try:
                         # Licensed source adapters may serve all catalog models in one feed.
-                        items=(collect_public(code,catalog) if pilot_mode(code) else
-                               collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8'))))
+                        crawl_result=None
+                        if pilot_mode(code):
+                            cur.execute('''SELECT catalog_index,vehicle_catalog_id,next_url,page_depth
+                                FROM public_crawl_checkpoints WHERE source_code=%s''',(code,))
+                            checkpoint=cur.fetchone() or {}
+                            crawl_result=crawl_catalog(code,catalog,checkpoint,priority_ids)
+                            items=crawl_result['rows']
+                        else:
+                            items=collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},
+                                                 max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8')))
                         valid=[]; reasons=defaultdict(int)
                         for raw in items:
                             x,reason=clean_listing(raw,code,mapping,now=started)
@@ -197,6 +210,30 @@ def run_once(scheduled_for=None):
                             err='NO_MATCHING_CARS' if items and not valid else 'NO_RESULTS' if not items else None
                             _audit(cur,code,started,status,err,
                                    json.dumps(dict(reasons),ensure_ascii=False),len(items),len(valid),len(items)-len(valid))
+                            if crawl_result is not None:
+                                state=crawl_result['checkpoint']
+                                metrics=crawl_result['stats']
+                                cur.execute('''INSERT INTO public_crawl_checkpoints
+                                    (source_code,catalog_index,vehicle_catalog_id,next_url,
+                                     page_depth,total_pages,total_listings,last_attempt_at,updated_at)
+                                    VALUES(%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                                    ON CONFLICT(source_code) DO UPDATE SET
+                                      catalog_index=EXCLUDED.catalog_index,
+                                      vehicle_catalog_id=EXCLUDED.vehicle_catalog_id,
+                                      next_url=EXCLUDED.next_url,
+                                      page_depth=EXCLUDED.page_depth,
+                                      total_pages=public_crawl_checkpoints.total_pages+EXCLUDED.total_pages,
+                                      total_listings=public_crawl_checkpoints.total_listings+EXCLUDED.total_listings,
+                                      last_attempt_at=NOW(),updated_at=NOW()''',
+                                      (code,state['catalog_index'],state['vehicle_catalog_id'],
+                                       state['next_url'],state['page_depth'],metrics['pages'],len(valid)))
+                                cur.execute('''INSERT INTO public_crawl_history(
+                                    source_code,started_at,finished_at,pages_crawled,cards_seen,
+                                    details_visited,models_scanned,priority_models,accepted_listings,
+                                    checkpoint_index) VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s)''',
+                                    (code,started,metrics['pages'],metrics['cards'],
+                                     metrics['details'],metrics['models'],metrics['priority_models'],
+                                     len(valid),state['catalog_index']))
                         db.commit();good+=1
                     except SourceUnavailable as exc:
                         db.rollback();failed+=1

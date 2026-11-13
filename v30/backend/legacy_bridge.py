@@ -11,6 +11,7 @@ import re
 from urllib.parse import urlsplit
 from .domain import normalize, query_trim, query_year, query_condition
 from .connectors import SourceUnavailable
+from .quality import explicit_price_matches
 
 PILOT=('bama','divar','hamrah')
 HOSTS={'bama':'bama.ir','divar':'divar.ir','hamrah':'hamrah-mechanic.com'}
@@ -70,16 +71,16 @@ def _explicit_gear(text):
 
 def _safe_listing(code,car,card):
     from .legacy_market.common import same_host
-    if not isinstance(card,dict) or card.get('detail_mismatch') or card.get('price_conflict'):return None
+    if not isinstance(card,dict) or card.get('detail_mismatch') or card.get('price_conflict') or card.get('detail_conflict'):return None
     url=str(card.get('url') or '')
     if not url.startswith('https://') or not same_host(url,HOSTS[code]):return None
     title=str(card.get('title') or '').strip()[:200]
     content=str(card.get('content') or '')[:1600]
     combined=title+' '+content
-    # Reject naked price-widget numbers without a verified TOMAN denomination.
-    # The v29 widget parser can return a bare figure with unknown currency.
-    if 'تومان' not in normalize(combined):return None
+    # A bare price widget plus an unrelated 'تومان' fee is not price evidence.
     price=card.get('price')
+    price_evidence=card.get('_price_evidence_text') or combined
+    if not explicit_price_matches(price,price_evidence):return None
     year=card.get('year') or query_year(title)
     # Named commercial variants outrank generic gearbox words (Prime vs AT).
     text_norm=normalize(combined)
@@ -122,7 +123,10 @@ def _safe_listing(code,car,card):
             'trim':trim,'model_year':int(year),'year_system':'jalali' if int(year)<1500 else 'gregorian',
             'condition':condition,'mileage_km':mileage,'body_condition':body,
             'transmission':gear,'fuel_type':None,'price_toman':int(price),
-            'currency':'toman','price_text':combined[:300],
+            'currency':'toman',
+            # A normalized cash price clause is emitted ONLY after independently
+            # verifying the amount in the local source text above.
+            'price_text':'قیمت خودرو '+str(int(price))+' تومان',
             'raw_type':'listing','published_at':card.get('published_at'),'city':''}
 
 def collect_public(code,catalog):

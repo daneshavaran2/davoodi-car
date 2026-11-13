@@ -69,7 +69,7 @@ def price_rows(catalog_id,year=None,trim=None,condition=None):
        v.fuel_type,p.body_condition,p.sample_count,p.source_count,p.low_toman,p.median_toman,
        p.high_toman,p.confidence,p.computed_at,p.stale_after,v.trim_name,v.transmission
        FROM price_estimates p LEFT JOIN vehicle_variants v ON v.id=p.variant_id
-       WHERE p.vehicle_catalog_id=%s AND p.sample_count>=5'''
+       WHERE p.vehicle_catalog_id=%s AND p.sample_count>=5 AND p.stale_after>NOW()'''
     if year is not None:
         sql+=' AND p.model_year=%s';params.append(year)
     if condition is not None:
@@ -116,7 +116,7 @@ def source_statuses():
             sources=cur.fetchall()
             cur.execute('SELECT * FROM scheduler_runs ORDER BY scheduled_for DESC LIMIT 1')
             schedule=cur.fetchone()
-            cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5')
+            cur.execute('SELECT COUNT(*) AS n FROM price_estimates WHERE sample_count>=5 AND stale_after>NOW()')
             prices=cur.fetchone()['n']
     return sources,schedule,prices
 

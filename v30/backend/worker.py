@@ -17,6 +17,7 @@ from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
 from . import nemuda
+from .quality import price_outliers,source_cooldown
 from .legacy_bridge import pilot_mode
 from .legacy_crawler import crawl_catalog
 
@@ -119,7 +120,7 @@ def _recompute(cur,run_started):
        l.vehicle_catalog_id AS catalog_id,l.model_year AS year,
        l.year_system,l.trim_name AS trim,l.vehicle_condition AS condition,
        l.mileage_km,l.transmission,l.fuel_type,l.body_condition,l.price_toman,l.observed_at,
-       l.title,l.city
+       l.title,l.city,l.published_at
        FROM car_listings l JOIN data_sources s ON s.code=l.source_code
        WHERE s.enabled AND l.validation_status='valid' AND l.price_kind='asking'
        AND l.expires_at>NOW() AND l.last_seen_at>NOW()-INTERVAL '14 days'
@@ -144,20 +145,34 @@ def _recompute(cur,run_started):
         # Freshness is earned only if this run actually fetched at least one
         # valid ad from this precise group. A response from an unrelated source
         # must not make all old cached price ranges appear freshly updated.
-        if not any(a['observed_at']>=run_started for a in ads):
+        # A fresh but incorrect 10x amount must not refresh an otherwise stale
+        # group. Filter per exact model/trim/year/condition segment FIRST.
+        priced_ads,outliers=price_outliers(ads)
+        if not any(a['observed_at']>=run_started for a in priced_ads):
             continue
-        q=quote(ads)
+        q=quote(priced_ads)
         if not q:continue
+        # Many sources omit publication dates: do not infer that unknown
+        # publication date means a fresh underlying offer.
+        dated=sum(a.get('published_at') is not None for a in priced_ads)
+        if q['confidence']=='high' and (outliers or dated<0.75*len(priced_ads)):
+            q['confidence']='medium'
         catalog_id,year,system,trim,condition,transmission,fuel,body,band=key
         segment=hashlib.sha256(json.dumps(key,ensure_ascii=False).encode()).hexdigest()[:40]
-        variant=_variant(cur,ads[0])
+        variant=_variant(cur,priced_ads[0])
         now=_now()
+        # One full 660-model sweep can span many scheduling slots. A 2-hour
+        # expiry made nearly every otherwise useful segment unavailable.
+        # Use a bounded TTL and expose computed_at so UI never implies live.
+        try:ttl_hours=int(os.getenv('PRICE_ESTIMATE_TTL_HOURS','24'))
+        except ValueError:ttl_hours=24
+        ttl_hours=max(1,min(ttl_hours,168))
         cur.execute('''INSERT INTO price_estimates(
          segment_key,vehicle_catalog_id,variant_id,model_year,year_system,
          vehicle_condition,mileage_band,body_condition,region,sample_count,
          source_count,low_toman,median_toman,high_toman,confidence,
          computed_at,freshest_listing_at,stale_after,calculation_version)
-         VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s,%s,%s,%s,%s,'v30.1')
+         VALUES(%s,%s,%s,%s,%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s,%s,%s,%s,%s,'v30.8')
          ON CONFLICT(segment_key) DO UPDATE SET
          sample_count=EXCLUDED.sample_count,source_count=EXCLUDED.source_count,
          low_toman=EXCLUDED.low_toman,median_toman=EXCLUDED.median_toman,
@@ -166,13 +181,13 @@ def _recompute(cur,run_started):
          stale_after=EXCLUDED.stale_after,calculation_version=EXCLUDED.calculation_version''',
          (segment,catalog_id,variant,year,system,condition,band,body,
           q['count'],len(q['sources']),q['low'],q['median'],q['high'],q['confidence'],
-          now,max(a['observed_at'] for a in ads),now+timedelta(hours=2)))
+          now,max(a['observed_at'] for a in priced_ads),now+timedelta(hours=ttl_hours)))
         cur.execute('''INSERT INTO price_estimate_history(segment_key,computed_at,sample_count,
             source_count,low_toman,median_toman,high_toman,confidence,calculation_version)
-            VALUES(%s,NOW(),%s,%s,%s,%s,%s,%s,'v30.1')''',
+            VALUES(%s,NOW(),%s,%s,%s,%s,%s,%s,'v30.8')''',
             (segment,q['count'],len(q['sources']),q['low'],q['median'],q['high'],q['confidence']))
         cur.execute('DELETE FROM price_samples WHERE segment_key=%s',(segment,))
-        for ad in ads:
+        for ad in priced_ads:
             cur.execute('''INSERT INTO price_samples(segment_key,source_code,external_id,
                  price_toman,url,observed_at) VALUES(%s,%s,%s,%s,%s,%s)
                  ON CONFLICT(segment_key,source_code,external_id) DO NOTHING''',
@@ -202,7 +217,7 @@ def run_once(scheduled_for=None):
                 cur.execute('''SELECT catalog_id,brand,model,display_name FROM vehicle_models''')
                 catalog=cur.fetchall()
                 mapping={(normalize(x['brand']),normalize(x['model'])):x['catalog_id'] for x in catalog}
-                cur.execute('SELECT code,enabled FROM data_sources ORDER BY code')
+                cur.execute('SELECT code,enabled,last_error_code,last_attempt_at FROM data_sources ORDER BY code')
                 sources=cur.fetchall()
                 cur.execute('''SELECT DISTINCT vehicle_catalog_id FROM refresh_requests
                     WHERE status='pending' AND vehicle_catalog_id IS NOT NULL
@@ -218,6 +233,17 @@ def run_once(scheduled_for=None):
                           error_code,error_detail) VALUES(%s,%s,NOW(),'skipped',%s,%s)''',
                           (code,started,'TERMS_NOT_PERMITTED','Source disabled by administrator'))
                         db.commit();continue
+                    # Respect a source's explicit 403/429/CAPTCHA response instead
+                    # of attempting the same blocked request every 30 minutes.
+                    if pilot_mode(code) and source_cooldown(
+                        source.get('last_error_code'),source.get('last_attempt_at'),
+                        started,os.getenv('PUBLIC_CRAWL_COOLDOWN_HOURS','6')):
+                        cur.execute('''INSERT INTO fetch_runs(
+                          source_code,started_at,finished_at,status,error_code,error_detail)
+                          VALUES(%s,%s,NOW(),'skipped','SOURCE_COOLDOWN',
+                                 'Waiting after provider access denial')''',(code,started))
+                        db.commit()
+                        continue
                     try:
                         # Licensed source adapters may serve all catalog models in one feed.
                         crawl_result=None
@@ -239,9 +265,30 @@ def run_once(scheduled_for=None):
                         with db.transaction():
                             for x in valid:_save_ad(cur,x)
                             status='success' if valid else 'partial'
-                            err='NO_MATCHING_CARS' if items and not valid else 'NO_RESULTS' if not items else None
+                            metrics=crawl_result['stats'] if crawl_result is not None else {}
+                            page_errors=metrics.get('errors') or {}
+                            if valid:
+                                err=None
+                            elif page_errors and not metrics.get('pages'):
+                                err=max(page_errors,key=page_errors.get)
+                            elif metrics.get('conflicts'):
+                                err='DETAIL_CONFLICT'
+                            elif items or metrics.get('cards'):
+                                err='NO_VERIFIED_LISTINGS'
+                            else:
+                                err='NO_RESULTS'
+                            details={'normalizer':dict(reasons)}
+                            if metrics:
+                                details['crawl']={k:metrics.get(k,0) for k in
+                                    ('pages','cards','rejected','conflicts','skipped_models')}
+                                details['errors']=page_errors
+                            # The crawler returns only fully converted rows.
+                            # The raw card count must come from its telemetry;
+                            # otherwise admin falsely reports zero fetched pages.
+                            fetched=max(len(items),int(metrics.get('cards') or 0))
                             _audit(cur,code,started,status,err,
-                                   json.dumps(dict(reasons),ensure_ascii=False),len(items),len(valid),len(items)-len(valid))
+                                   json.dumps(details,ensure_ascii=False),
+                                   fetched,len(valid),max(0,fetched-len(valid)))
                             if crawl_result is not None:
                                 state=crawl_result['checkpoint']
                                 metrics=crawl_result['stats']
@@ -262,13 +309,16 @@ def run_once(scheduled_for=None):
                                 cur.execute('''INSERT INTO public_crawl_history(
                                     source_code,started_at,finished_at,pages_crawled,cards_seen,
                                     details_visited,models_scanned,priority_models,skipped_models,error_codes,
-                                    accepted_listings,checkpoint_index)
-                                    VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)''',
+                                    evidence_rejected,detail_conflicts,accepted_listings,checkpoint_index)
+                                    VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s)''',
                                     (code,started,metrics['pages'],metrics['cards'],
                                      metrics['details'],metrics['models'],metrics['priority_models'],
                                      metrics['skipped_models'],json.dumps(metrics['errors'],ensure_ascii=False),
+                                     metrics.get('rejected',0),metrics.get('conflicts',0),
                                      len(valid),state['catalog_index']))
-                        db.commit();good+=1
+                        db.commit()
+                        if valid:good+=1
+                        else:failed+=1
                     except SourceUnavailable as exc:
                         db.rollback();failed+=1
                         _audit(cur,code,started,'failed',exc.code,str(exc)[:230]);db.commit()

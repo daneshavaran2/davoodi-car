@@ -16,7 +16,7 @@ STATE = {'phase': 'starting', 'bootstrapped': False, 'started_at': time.time()}
 def response_document(path):
     if path in ('/', '/api/live', '/health'):
         return 200, {'status': 'alive', 'service': 'davoodicar-worker',
-                     'version': '30.7.0', 'phase': STATE['phase'],
+                     'version': '30.8.0', 'phase': STATE['phase'],
                      'database_bootstrapped': STATE['bootstrapped'],
                      'source_access_verified': False}
     if path == '/api/worker/health':
@@ -36,7 +36,7 @@ def response_document(path):
                     cur.execute("SELECT source_code,catalog_index,page_depth,total_pages,total_listings,updated_at FROM public_crawl_checkpoints ORDER BY source_code")
                     progress = cur.fetchall()
                     cur.execute("""SELECT source_code,pages_crawled,cards_seen,details_visited,
-                        models_scanned,skipped_models,error_codes,accepted_listings,finished_at FROM public_crawl_history
+                        models_scanned,skipped_models,error_codes,evidence_rejected,detail_conflicts,accepted_listings,finished_at FROM public_crawl_history
                         WHERE id IN (SELECT MAX(id) FROM public_crawl_history GROUP BY source_code)
                         ORDER BY source_code""")
                     recent = cur.fetchall()

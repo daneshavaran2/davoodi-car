@@ -20,6 +20,7 @@ from .legacy_market.browser import source_session
 from .legacy_market import bama, divar, hamrah
 from .legacy_bridge import _safe_listing, _translate_error
 from .legacy_details import extract_public_features
+from .quality import detail_conflict
 
 HOSTS={'bama':'bama.ir','divar':'divar.ir','hamrah':'hamrah-mechanic.com'}
 _DETAIL={'bama':bama._is_detail,'divar':divar._is_detail,'hamrah':hamrah._is_detail}
@@ -117,6 +118,10 @@ def _detail_enrich(card):
         html=fetch_html(card['url'],timeout=9)
         more=detail_fields(html,card['title'])
         card['_extras']=extract_public_features(html,card['url'])
+        conflict=detail_conflict(card,more)
+        if conflict:
+            card['detail_conflict']=conflict
+            return card
         if more.get('title') and not matches_model('',card.get('_model') or '',more['title']):
             card['detail_mismatch']=True;return card
         if card.get('price') and more.get('price'):
@@ -139,7 +144,7 @@ def scan_model(code,car,*,start_url=None,max_pages=3,max_ads=40):
     if not allowed_page(start,code):raise SourceUnavailable('INVALID_PAGE_URL','Not a public list URL')
     current=start;seen_pages=set();seen_ads=set();rows=[];pages=0;cards_seen=0
     detail_limit=_positive('PUBLIC_CRAWL_DETAILS_PER_MODEL',12,40)
-    details=0
+    details=0;rejected=0;conflicts=0
     max_pages=max(1,min(12,max_pages))
     max_ads=max(1,min(150,max_ads))
     with source_session():
@@ -167,10 +172,14 @@ def scan_model(code,car,*,start_url=None,max_pages=3,max_ads=40):
                     if converted['extra_fields'].get('city'):
                         converted['city']=converted['extra_fields']['city']
                     rows.append(converted)
+                else:
+                    rejected+=1
+                    if card.get('detail_conflict') or card.get('price_conflict') or card.get('detail_mismatch'):
+                        conflicts+=1
                 if len(rows)>=max_ads:break
             following=next_page_link(raw,current,code,seen_pages)
             if len(rows)>=max_ads:
-                return rows,following,{'pages':pages,'cards':cards_seen,'details':details}
+                return rows,following,{'pages':pages,'cards':cards_seen,'details':details,'rejected':rejected,'conflicts':conflicts}
             current=following
             if not current:break
     return rows,current,{'pages':pages,'cards':cards_seen,'details':details}
@@ -191,7 +200,7 @@ def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
     depth=max(0,int(checkpoint.get('page_depth') or 0))
     current_id=checkpoint.get('vehicle_catalog_id')
     next_url=checkpoint.get('next_url')
-    output=[];stats={'pages':0,'cards':0,'details':0,'models':0,'priority_models':0,'skipped_models':0,'errors':{}}
+    output=[];stats={'pages':0,'cards':0,'details':0,'rejected':0,'conflicts':0,'models':0,'priority_models':0,'skipped_models':0,'errors':{}}
     deadline=time.monotonic()+_positive('PUBLIC_CRAWL_MAX_RUNTIME_SECONDS',150,1200)
     blocking=('HTTP_403','HTTP_429','CAPTCHA_OR_CHALLENGE')
     scanned_ids=set()
@@ -211,7 +220,7 @@ def crawl_catalog(code,catalog,checkpoint,priority_ids=()):
             continue
         output.extend(ads);scanned_ids.add(pid)
         stats['priority_models']+=1
-        for key in ('pages','cards','details'):stats[key]+=metric[key]
+        for key in ('pages','cards','details','rejected','conflicts'):stats[key]+=metric.get(key,0)
     for _ in range(model_limit):
         if time.monotonic()>deadline:break
         car=cars[index]

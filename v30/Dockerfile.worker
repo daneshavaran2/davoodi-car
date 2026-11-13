@@ -1,17 +1,17 @@
 # Dedicated Liara Worker: no React build, no API web service.
-FROM python:3.12-slim-bookworm
+FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app \
     PORT=8000 SERVICE_ROLE=worker SCHEDULER_TZ=Asia/Tehran
 WORKDIR /app
-RUN groupadd -r davoodi && useradd --no-log-init -r -g davoodi -m davoodi
-COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements.worker.txt ./
+RUN python -m pip install --no-cache-dir -r requirements.worker.txt
 COPY backend ./backend
+COPY safety_v24.py ./safety_v24.py
 COPY scripts ./scripts
 COPY database ./database
 COPY data/vehicle_catalog.csv ./data/vehicle_catalog.csv
-RUN python -m compileall -q /app/backend /app/scripts
-USER davoodi
+RUN python -m compileall -q /app/backend /app/scripts /app/safety_v24.py
+USER pwuser
 EXPOSE 8000
 # This port serves health checks only, not the price-search UI.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \

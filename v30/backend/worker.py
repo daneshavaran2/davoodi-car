@@ -156,6 +156,12 @@ def _recompute(cur,run_started):
         segment=hashlib.sha256(json.dumps(key,ensure_ascii=False).encode()).hexdigest()[:40]
         variant=_variant(cur,priced_ads[0])
         now=_now()
+        # One full 660-model sweep can span many scheduling slots. A 2-hour
+        # expiry made nearly every otherwise useful segment unavailable.
+        # Use a bounded TTL and expose computed_at so UI never implies live.
+        try:ttl_hours=int(os.getenv('PRICE_ESTIMATE_TTL_HOURS','24'))
+        except ValueError:ttl_hours=24
+        ttl_hours=max(1,min(ttl_hours,168))
         cur.execute('''INSERT INTO price_estimates(
          segment_key,vehicle_catalog_id,variant_id,model_year,year_system,
          vehicle_condition,mileage_band,body_condition,region,sample_count,
@@ -170,10 +176,10 @@ def _recompute(cur,run_started):
          stale_after=EXCLUDED.stale_after,calculation_version=EXCLUDED.calculation_version''',
          (segment,catalog_id,variant,year,system,condition,band,body,
           q['count'],len(q['sources']),q['low'],q['median'],q['high'],q['confidence'],
-          now,max(a['observed_at'] for a in ads),now+timedelta(hours=2)))
+          now,max(a['observed_at'] for a in priced_ads),now+timedelta(hours=ttl_hours)))
         cur.execute('''INSERT INTO price_estimate_history(segment_key,computed_at,sample_count,
             source_count,low_toman,median_toman,high_toman,confidence,calculation_version)
-            VALUES(%s,NOW(),%s,%s,%s,%s,%s,%s,'v30.1')''',
+            VALUES(%s,NOW(),%s,%s,%s,%s,%s,%s,'v30.8')''',
             (segment,q['count'],len(q['sources']),q['low'],q['median'],q['high'],q['confidence']))
         cur.execute('DELETE FROM price_samples WHERE segment_key=%s',(segment,))
         for ad in priced_ads:

@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS public_crawl_history (
   details_visited INTEGER NOT NULL DEFAULT 0,
   models_scanned INTEGER NOT NULL DEFAULT 0,
   priority_models INTEGER NOT NULL DEFAULT 0,
+  skipped_models INTEGER NOT NULL DEFAULT 0,
+  error_codes JSONB NOT NULL DEFAULT '{}'::jsonb,
   accepted_listings INTEGER NOT NULL DEFAULT 0,
   checkpoint_index INTEGER NOT NULL DEFAULT 0
 );

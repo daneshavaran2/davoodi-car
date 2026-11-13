@@ -59,3 +59,14 @@ def test_marketplace_collection_never_called_by_price_route():
         r=client.get('/api/v1/prices/estimate?q=فیدلیتی%20پرایم')
         assert r.status_code==200
         forbidden.assert_not_called()
+
+def test_health_version_follows_running_fastapi_release(monkeypatch):
+    import json
+    from backend import api
+    assert api.live()['version']==api.app.version=='30.8.0'
+    monkeypatch.delenv('DATABASE_URL',raising=False)
+    response=api.health()
+    assert response.status_code==503
+    body=json.loads(response.body)
+    assert body['version']==api.app.version
+    assert body['error_code']=='DATABASE_URL_MISSING'

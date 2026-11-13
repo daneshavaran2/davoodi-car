@@ -16,7 +16,7 @@ STATE = {'phase': 'starting', 'bootstrapped': False, 'started_at': time.time()}
 def response_document(path):
     if path in ('/', '/api/live', '/health'):
         return 200, {'status': 'alive', 'service': 'davoodicar-worker',
-                     'version': '30.6.0', 'phase': STATE['phase'],
+                     'version': '30.7.0', 'phase': STATE['phase'],
                      'database_bootstrapped': STATE['bootstrapped'],
                      'source_access_verified': False}
     if path == '/api/worker/health':
@@ -33,6 +33,13 @@ def response_document(path):
                     run = cur.fetchone()
                     cur.execute("SELECT code,enabled,last_error_code,last_success_at FROM data_sources WHERE code IN ('bama','divar','hamrah') ORDER BY CASE code WHEN 'bama' THEN 1 WHEN 'divar' THEN 2 ELSE 3 END")
                     public_sources = cur.fetchall()
+                    cur.execute("SELECT source_code,catalog_index,page_depth,total_pages,total_listings,updated_at FROM public_crawl_checkpoints ORDER BY source_code")
+                    progress = cur.fetchall()
+                    cur.execute("""SELECT source_code,pages_crawled,cards_seen,details_visited,
+                        models_scanned,skipped_models,error_codes,accepted_listings,finished_at FROM public_crawl_history
+                        WHERE id IN (SELECT MAX(id) FROM public_crawl_history GROUP BY source_code)
+                        ORDER BY source_code""")
+                    recent = cur.fetchall()
             last = None if not run else {
                 'scheduled_for': run['scheduled_for'].isoformat() if run['scheduled_for'] else None,
                 'status': run['status'],
@@ -45,8 +52,15 @@ def response_document(path):
                            'last_error_code':r['last_error_code'],
                            'last_success_at':r['last_success_at'].isoformat() if r['last_success_at'] else None}
                            for r in public_sources],
+                         'crawler_progress': [{'source':x['source_code'],'catalog_index':x['catalog_index'],
+                           'page_depth':x['page_depth'],'total_pages':x['total_pages'],
+                           'total_listings':x['total_listings'],
+                           'updated_at':x['updated_at'].isoformat() if x['updated_at'] else None}
+                           for x in progress],
+                         'last_crawl_metrics': [{**x,'finished_at':x['finished_at'].isoformat() if x['finished_at'] else None}
+                           for x in recent],
                          'last_scheduler_run': last,
-                         'note': ('No feed sources are enabled; no new market prices can be collected.'
+                         'note': ('No price sources are enabled; no new market prices can be collected.'
                                   if not enabled else 'Enabled sources are not proof of successful collection.')}
         except Exception:
             return 503, {'status': 'unavailable', 'service': 'davoodicar-worker',

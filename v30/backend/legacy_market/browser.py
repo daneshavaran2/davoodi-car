@@ -124,6 +124,18 @@ class BrowserSession:
             visible = (self.page.locator('body').inner_text(timeout=2000) or '')[:2500].lower()
             if any(k in title or k in visible for k in ('captcha', 'کپچا', 'تأیید کنید ربات نیستید', 'verify you are human')):
                 raise RuntimeError('سایت تأیید انسانی یا کپچا درخواست کرده است؛ دور زده نمی‌شود')
+            # Scroll ordinary public listing pages to load lazy-rendered
+            # cards. This is normal page interaction, never a CAPTCHA solver
+            # or a second transport after 403/429.
+            if not is_detail:
+                try: steps=max(0,min(12,int(os.getenv('PUBLIC_CRAWL_SCROLL_STEPS','5'))))
+                except ValueError: steps=5
+                for _ in range(steps):
+                    self.page.mouse.wheel(0,900)
+                    self.page.wait_for_timeout(300)
+                    body=(self.page.locator('body').inner_text(timeout=1500) or '')[:1200].lower()
+                    if any(x in body for x in ('captcha','کپچا','تأیید کنید ربات نیستید','verify you are human')):
+                        raise RuntimeError('CAPTCHA_OR_CHALLENGE: public-page access requires human verification')
             markup = self.page.content()
             if len(markup.encode('utf-8')) > max_bytes:
                 raise RuntimeError('صفحه رندرشده بزرگ‌تر از سقف امن است')

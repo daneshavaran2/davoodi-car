@@ -17,13 +17,25 @@ from .storage import connection
 from .domain import normalize, clean_listing, grouping_key, quote, mileage_band
 from .connectors import SOURCE_CODES, SourceUnavailable, collect_source
 from . import nemuda
-from .legacy_bridge import pilot_mode, collect_public
+from .legacy_bridge import pilot_mode
+from .legacy_crawler import crawl_catalog
 
 log=logging.getLogger('davoodicar.worker')
 ADVISORY_LOCK_ID=7428343991011
 
 
 def _now():return datetime.now(timezone.utc)
+
+
+def _schedule_slot():
+    """A predictable 15/30/60-minute UTC instant in Tehran local time."""
+    zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
+    try: interval=int(os.getenv('CRAWLER_INTERVAL_MINUTES','60'))
+    except ValueError:interval=60
+    if interval not in (15,30,60):interval=60
+    local=_now().astimezone(zone)
+    floor_minute=(local.minute//interval)*interval
+    return local.replace(minute=floor_minute,second=0,microsecond=0).astimezone(timezone.utc)
 
 
 def _audit(cur,code,started,status,err_code=None,detail='',fetched=0,valid=0,rejected=0):
@@ -76,6 +88,17 @@ def _save_ad(cur,x):
          x['observed_at'],x['observed_at'],x['observed_at']+timedelta(days=14),
          hashlib.sha256((normalize(x['title'])+str(x['price_toman'])+str(x['mileage_km'])+x['city']).encode()).hexdigest(),
          x['title'],x['trim']))
+    # Optional public details are kept independently; they never override
+    # the numeric facts that passed clean_listing validation.
+    if x.get('extra_fields'):
+        cur.execute('''INSERT INTO public_listing_extras
+            (source_code,external_id,url,public_fields,observed_at)
+            VALUES(%s,%s,%s,%s::jsonb,NOW())
+            ON CONFLICT(source_code,external_id) DO UPDATE SET
+              url=EXCLUDED.url,public_fields=EXCLUDED.public_fields,
+              observed_at=NOW()''',
+            (x['source'],x['external_id'],x['url'],
+             json.dumps(x['extra_fields'],ensure_ascii=False)))
 
 
 def _recompute(cur,run_started):
@@ -150,8 +173,7 @@ def _recompute(cur,run_started):
 def run_once(scheduled_for=None):
     """A single scheduler tick. Advisory lock and hour key prevent overlap."""
     if scheduled_for is None:
-        zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
-        scheduled_for=_now().astimezone(zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+        scheduled_for=_schedule_slot()
     with connection(worker=True) as db:
         with db.cursor() as cur:
             cur.execute('SELECT pg_try_advisory_lock(%s) AS locked',(ADVISORY_LOCK_ID,))
@@ -171,6 +193,10 @@ def run_once(scheduled_for=None):
                 mapping={(normalize(x['brand']),normalize(x['model'])):x['catalog_id'] for x in catalog}
                 cur.execute('SELECT code,enabled FROM data_sources ORDER BY code')
                 sources=cur.fetchall()
+                cur.execute('''SELECT DISTINCT vehicle_catalog_id FROM refresh_requests
+                    WHERE status='pending' AND vehicle_catalog_id IS NOT NULL
+                    ORDER BY vehicle_catalog_id LIMIT 2''')
+                priority_ids=[x['vehicle_catalog_id'] for x in cur.fetchall()]
                 good=0;failed=0
                 run_started=_now()
                 for source in sources:
@@ -183,8 +209,16 @@ def run_once(scheduled_for=None):
                         db.commit();continue
                     try:
                         # Licensed source adapters may serve all catalog models in one feed.
-                        items=(collect_public(code,catalog) if pilot_mode(code) else
-                               collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8'))))
+                        crawl_result=None
+                        if pilot_mode(code):
+                            cur.execute('''SELECT catalog_index,vehicle_catalog_id,next_url,page_depth
+                                FROM public_crawl_checkpoints WHERE source_code=%s''',(code,))
+                            checkpoint=cur.fetchone() or {}
+                            crawl_result=crawl_catalog(code,catalog,checkpoint,priority_ids)
+                            items=crawl_result['rows']
+                        else:
+                            items=collect_source(code,{'catalog_version':'v30','locale':'fa-IR'},
+                                                 max_pages=int(os.getenv('MAX_PAGES_PER_SOURCE','8')))
                         valid=[]; reasons=defaultdict(int)
                         for raw in items:
                             x,reason=clean_listing(raw,code,mapping,now=started)
@@ -197,6 +231,32 @@ def run_once(scheduled_for=None):
                             err='NO_MATCHING_CARS' if items and not valid else 'NO_RESULTS' if not items else None
                             _audit(cur,code,started,status,err,
                                    json.dumps(dict(reasons),ensure_ascii=False),len(items),len(valid),len(items)-len(valid))
+                            if crawl_result is not None:
+                                state=crawl_result['checkpoint']
+                                metrics=crawl_result['stats']
+                                cur.execute('''INSERT INTO public_crawl_checkpoints
+                                    (source_code,catalog_index,vehicle_catalog_id,next_url,
+                                     page_depth,total_pages,total_listings,last_attempt_at,updated_at)
+                                    VALUES(%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                                    ON CONFLICT(source_code) DO UPDATE SET
+                                      catalog_index=EXCLUDED.catalog_index,
+                                      vehicle_catalog_id=EXCLUDED.vehicle_catalog_id,
+                                      next_url=EXCLUDED.next_url,
+                                      page_depth=EXCLUDED.page_depth,
+                                      total_pages=public_crawl_checkpoints.total_pages+EXCLUDED.total_pages,
+                                      total_listings=public_crawl_checkpoints.total_listings+EXCLUDED.total_listings,
+                                      last_attempt_at=NOW(),updated_at=NOW()''',
+                                      (code,state['catalog_index'],state['vehicle_catalog_id'],
+                                       state['next_url'],state['page_depth'],metrics['pages'],len(valid)))
+                                cur.execute('''INSERT INTO public_crawl_history(
+                                    source_code,started_at,finished_at,pages_crawled,cards_seen,
+                                    details_visited,models_scanned,priority_models,skipped_models,error_codes,
+                                    accepted_listings,checkpoint_index)
+                                    VALUES(%s,%s,NOW(),%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s)''',
+                                    (code,started,metrics['pages'],metrics['cards'],
+                                     metrics['details'],metrics['models'],metrics['priority_models'],
+                                     metrics['skipped_models'],json.dumps(metrics['errors'],ensure_ascii=False),
+                                     len(valid),state['catalog_index']))
                         db.commit();good+=1
                     except SourceUnavailable as exc:
                         db.rollback();failed+=1
@@ -246,8 +306,7 @@ def main():
         last_tick=None
         while True:
             try:
-                local_zone=ZoneInfo(os.getenv('SCHEDULER_TZ','Asia/Tehran'))
-                current=_now().astimezone(local_zone).replace(minute=0,second=0,microsecond=0).astimezone(timezone.utc)
+                current=_schedule_slot()
                 if current!=last_tick:
                     last_tick=current
                     log.info('Scheduled collection: %s',run_once(current))

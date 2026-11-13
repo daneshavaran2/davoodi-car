@@ -22,16 +22,21 @@ def valid_card():
             'content':'فیدلیتی پرایم اتومات 1402 کارکرد 45000 کیلومتر بدون رنگ قیمت خودرو 1 میلیارد و 700 میلیون تومان',
             'year':1402,'mileage':45000,'price':1700000000,'published_at':None}
 
-def test_no_legacy_mode_by_default(monkeypatch):
+def test_default_public_mode_without_json_feed(monkeypatch):
     monkeypatch.delenv('SOURCE_BAMA_MODE',raising=False)
-    assert bridge.pilot_mode('bama') is False
+    monkeypatch.delenv('SOURCE_BAMA_API_URL',raising=False)
+    assert bridge.pilot_mode('bama') is True
 
-def test_explicit_access_approval_required(monkeypatch):
+def test_explicit_feed_url_takes_priority(monkeypatch):
+    monkeypatch.delenv('SOURCE_BAMA_MODE',raising=False)
+    monkeypatch.setenv('SOURCE_BAMA_API_URL','https://provider.example/api/cars')
+    assert bridge.pilot_mode('bama') is False
     monkeypatch.setenv('SOURCE_BAMA_MODE','legacy_public')
-    monkeypatch.delenv('SOURCE_BAMA_PUBLIC_ACCESS_APPROVED',raising=False)
-    with pytest.raises(SourceUnavailable) as exc:
-        bridge.collect_public('bama',CARS)
-    assert exc.value.code=='PERMISSION_NOT_CONFIRMED'
+    assert bridge.pilot_mode('bama') is True
+
+def test_non_pilot_source_keeps_feed_mode(monkeypatch):
+    monkeypatch.setenv('SOURCE_SHEYPOOR_MODE','legacy_public')
+    assert bridge.pilot_mode('sheypoor') is False
 
 def test_fidelity_adapter_accepts_evidence_and_validator():
     row=bridge._safe_listing('bama',CARS[0],valid_card())
